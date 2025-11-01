@@ -1,0 +1,164 @@
+/* Estilos para NotNative */
+
+/* Sidebar */
+.sidebar {
+  background-color: @sidebar_bg_color;
+  border-right: 1px solid alpha(@borders, 0.3);
+}
+
+.sidebar .heading {
+  font-weight: bold;
+  font-size: 1.1em;
+}
+
+.navigation-sidebar row {
+  border-radius: 6px;
+  margin: 2px 8px;
+  padding: 4px;
+  transition: background-color 200ms ease;
+}
+
+.navigation-sidebar row:hover {
+  background-color: alpha(@accent_color, 0.08);
+}
+
+.navigation-sidebar row:selected {
+  background-color: alpha(@accent_color, 0.15);
+  font-weight: 500;
+}
+
+.status-bar {
+  background-color: alpha(@window_bg_color, 0.95);
+  border-top: 1px solid alpha(@borders, 0.5);
+  padding: 3px 8px;
+  font-family: monospace;
+  font-size: 0.7em;
+  min-height: 24px;
+}
+
+/* Resaltar el modo actual */
+.status-bar label:first-child {
+  margin-right: 12px;
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+
+/* Estilo para el TextView principal */
+textview {
+  padding: 20px 24px;
+  font-family: monospace;
+  font-size: 11pt;
+  background-color: @view_bg_color;
+}
+
+textview text {
+  background-color: @view_bg_color;
+  color: @view_fg_color;
+}
+
+/* Margen en la ventana principal */
+.compact {
+  padding: 0;
+}
+
+/* Espaciado en el header */
+headerbar {
+  padding: 0 12px;
+}
+
+headerbar > * {
+  margin: 0 6px;
+}
+
+/* Scrollbars más discretas */
+scrollbar {
+  background-color: transparent;
+}
+
+/* Menú de ajustes minimalista */
+popover.menu {
+  padding: 4px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+popover.menu box {
+  min-width: 180px;
+}
+
+popover.menu button {
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+popover.menu button:hover {
+  background-color: alpha(@accent_color, 0.1);
+}
+
+popover.menu separator {
+  margin: 2px 8px;
+  opacity: 0.3;
+}
+
+/* Menú contextual del sidebar - igual de compacto que el menú de configuración */
+popover.menu.context-menu {
+  padding: 4px;
+  border-radius: 6px;
+  min-width: 0;
+}
+
+popover.menu.context-menu box {
+  min-width: 0;
+  padding: 2px;
+}
+
+popover.menu.context-menu button,
+popover.menu.context-menu modelbutton {
+  padding: 4px 10px;
+  min-height: 22px;
+  min-width: 0;
+  border-radius: 4px;
+  font-size: 0.85em;
+  margin: 0;
+}
+
+popover.menu.context-menu modelbutton > box {
+  padding: 0;
+  min-width: 0;
+}
+
+popover.menu.context-menu button:hover,
+popover.menu.context-menu modelbutton:hover {
+  background-color: alpha(@accent_color, 0.08);
+}
+
+/* Botones en el footer */
+.status-bar menubutton {
+  min-width: 20px;
+  min-height: 20px;
+}
+
+.status-bar menubutton button {
+  padding: 2px;
+  font-size: 0.85em;
+}
+
+.status-bar togglebutton {
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: 0.75em;
+  font-weight: bold;
+  border-radius: 4px;
+}
+
+.status-bar togglebutton:checked {
+  background-color: alpha(@accent_color, 0.2);
+  color: @accent_color;
+}
+
+/* Tema oscuro específico */
+@define-color notnative_normal_mode #4a90d9;
+@define-color notnative_insert_mode #73d216;
+@define-color notnative_command_mode #f57900;
+@define-color notnative_visual_mode #ad7fa8;
