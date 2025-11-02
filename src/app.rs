@@ -2194,16 +2194,23 @@ impl MainApp {
         }
         
         // Cargar el CSS de la aplicación
-        let app_css = if let Ok(exe_path) = std::env::current_exe() {
-            exe_path.parent()
-                .and_then(|p| p.parent())
-                .and_then(|p| p.parent())
-                .map(|p| p.join("assets/style.css"))
-                .and_then(|path| std::fs::read_to_string(&path).ok())
-        } else {
-            None
-        }.or_else(|| std::fs::read_to_string("assets/style.css").ok())
-         .or_else(|| std::fs::read_to_string("./notnative-app/assets/style.css").ok());
+        // Prioridad: 1) Sistema instalado, 2) Desarrollo local
+        let app_css = std::fs::read_to_string("/usr/share/notnative/assets/style.css")
+            .ok()
+            .or_else(|| {
+                // Rutas de desarrollo
+                if let Ok(exe_path) = std::env::current_exe() {
+                    exe_path.parent()
+                        .and_then(|p| p.parent())
+                        .and_then(|p| p.parent())
+                        .map(|p| p.join("assets/style.css"))
+                        .and_then(|path| std::fs::read_to_string(&path).ok())
+                } else {
+                    None
+                }
+            })
+            .or_else(|| std::fs::read_to_string("assets/style.css").ok())
+            .or_else(|| std::fs::read_to_string("./notnative-app/assets/style.css").ok());
         
         if let Some(app_css_content) = app_css {
             combined_css.push_str(&app_css_content);

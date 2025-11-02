@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=NotNative
+Comment=Note-taking application with Vim-like keybindings
+Exec=notnative-app
+Icon=notnative
+Terminal=false
+Type=Application
+Categories=Office;TextEditor;Utility;
+Keywords=notes;markdown;vim;editor;
+StartupNotify=true
