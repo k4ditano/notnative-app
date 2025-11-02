@@ -3,6 +3,8 @@ use relm4::{ComponentParts, ComponentSender, RelmWidgetExt, SimpleComponent, com
 use gtk::glib;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::core::{CommandParser, EditorAction, EditorMode, KeyModifiers, NoteBuffer, NotesDirectory, NoteFile, MarkdownParser, StyleType, NotesConfig, NotesDatabase, extract_tags, extract_all_tags, extract_inline_tags};
 use crate::i18n::{I18n, Language};
@@ -174,6 +176,9 @@ pub enum AppMsg {
     AskTranscribeYouTube { url: String, video_id: String }, // Preguntar si transcribir video
     InsertYouTubeLink(String), // Insertar solo el enlace del video
     InsertYouTubeWithTranscript { video_id: String }, // Insertar video con transcripción
+    MoveNoteToFolder { note_name: String, folder_name: Option<String> }, // Mover nota a carpeta
+    ReorderNotes { source_name: String, target_name: String }, // Reordenar notas
+    MoveFolder { folder_name: String, target_folder: Option<String> }, // Mover carpeta
 }
 
 #[component(pub)]
@@ -1157,6 +1162,8 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
         *model.is_populating_list.borrow_mut() = false;
         
         // Conectar evento de cambio de selección en el ListBox
+        // Deshabilitado para permitir drag-and-drop. La carga se hace con click en folder_click
+        /*
         let is_populating_for_select = model.is_populating_list.clone();
         let notes_list_for_focus = model.notes_list.clone();
         widgets.notes_list.connect_row_selected(
@@ -1207,6 +1214,7 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
                 }
             })
         );
+        */
         
         // Conectar activación de fila (Enter o doble click)
         widgets.notes_list.connect_row_activated(
@@ -1256,7 +1264,7 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
             })
         );
         
-        // Conectar click en carpetas para expandir/colapsar
+        // Conectar click en carpetas para expandir/colapsar y cargar notas
         let folder_click = gtk::GestureClick::new();
         folder_click.connect_released(
             gtk::glib::clone!(#[strong(rename_to = notes_list)] widgets.notes_list, #[strong] sender , move |gesture, _n_press, x, y| {
@@ -1275,11 +1283,69 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
                         if let Some(folder_name) = unsafe { row.data::<String>("folder_name").map(|d| d.as_ref().clone()) } {
                             sender.input(AppMsg::ToggleFolder(folder_name));
                         }
+                    } else {
+                        // Es una nota, cargarla
+                        // Primero intentar obtener el nombre de set_data (resultados de búsqueda)
+                        let note_name = unsafe {
+                            row.data::<String>("note_name")
+                                .map(|data| data.as_ref().clone())
+                        };
+                        
+                        if let Some(name) = note_name {
+                            sender.input(AppMsg::LoadNote(name));
+                            return;
+                        }
+                        
+                        // Si no está en set_data, obtener desde el label (lista normal)
+                        if let Some(child) = row.child() {
+                            if let Ok(box_widget) = child.downcast::<gtk::Box>() {
+                                // El label es el segundo hijo (después del icono)
+                                if let Some(label_widget) = box_widget.first_child().and_then(|w| w.next_sibling()) {
+                                    if let Ok(label) = label_widget.downcast::<gtk::Label>() {
+                                        let note_name = label.text().to_string();
+                                        sender.input(AppMsg::LoadNote(note_name));
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             })
         );
         widgets.notes_list.add_controller(folder_click);
+        
+        // Agregar DropTarget al notes_list para manejar drops en la raíz
+        let root_drop_target = gtk::DropTarget::new(glib::Type::STRING, gtk::gdk::DragAction::MOVE);
+        root_drop_target.connect_drop(
+            gtk::glib::clone!(#[strong] sender, move |_target, value, _x, _y| {
+                if let Ok(data_str) = value.get::<String>() {
+                    // Parsear el dato arrastrado
+                    if let Some((drag_type, drag_name)) = data_str.split_once(':') {
+                        match drag_type {
+                            "note" => {
+                                // Arrastrar nota al fondo -> mover a raíz
+                                sender.input(AppMsg::MoveNoteToFolder {
+                                    note_name: drag_name.to_string(),
+                                    folder_name: None, // None significa raíz
+                                });
+                                return true;
+                            },
+                            "folder" => {
+                                // Arrastrar carpeta al fondo -> mover a raíz
+                                sender.input(AppMsg::MoveFolder {
+                                    folder_name: drag_name.to_string(),
+                                    target_folder: None, // None significa raíz
+                                });
+                                return true;
+                            },
+                            _ => {}
+                        }
+                    }
+                }
+                false
+            })
+        );
+        widgets.notes_list.add_controller(root_drop_target);
         
         // Agregar manejador de Escape para el notes_list
         let text_view_for_list_escape = model.text_view.clone();
@@ -2027,6 +2093,15 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
             AppMsg::InsertYouTubeWithTranscript { video_id } => {
                 self.insert_youtube_with_transcript(&video_id, &sender);
             }
+            AppMsg::MoveNoteToFolder { note_name, folder_name } => {
+                self.move_note_to_folder(&note_name, folder_name.as_deref(), &sender);
+            }
+            AppMsg::ReorderNotes { source_name, target_name } => {
+                self.reorder_notes(&source_name, &target_name, &sender);
+            }
+            AppMsg::MoveFolder { folder_name, target_folder } => {
+                self.move_folder(&folder_name, target_folder.as_deref(), &sender);
+            }
         }
     }
 }
@@ -2490,9 +2565,11 @@ impl MainApp {
     
     /// Renderiza el texto markdown sin los símbolos de formato
     fn render_clean_markdown(&self, text: &str) -> String {
+        println!("DEBUG render_clean_markdown: Entrada: {:?}", text.lines().take(3).collect::<Vec<_>>());
         let mut result = String::new();
         let mut chars = text.chars().peekable();
         let mut in_code_block = false;
+        let mut at_line_start = true; // Flag para saber si estamos al inicio de una línea
         
         while let Some(ch) = chars.next() {
             match ch {
@@ -2513,6 +2590,7 @@ impl MainApp {
                         while let Some(&next_ch) = chars.peek() {
                             chars.next();
                             if next_ch == '\n' {
+                                at_line_start = true; // Después del \n estamos al inicio de línea
                                 break; // Consumir el \n y salir
                             }
                         }
@@ -2520,12 +2598,13 @@ impl MainApp {
                         continue;
                     } else if backtick_count == 1 {
                         // Código inline - no agregar el backtick
+                        at_line_start = false;
                         continue;
                     }
                 }
                 
                 // Encabezados: remover # (solo si no estamos en code block)
-                '#' if !in_code_block && (result.is_empty() || result.ends_with('\n')) => {
+                '#' if !in_code_block && at_line_start => {
                     // Contar cuántos # hay
                     let mut hash_count = 1;
                     while chars.peek() == Some(&'#') {
@@ -2536,68 +2615,73 @@ impl MainApp {
                     if chars.peek() == Some(&' ') {
                         chars.next();
                     }
+                    at_line_start = false; // Ya no estamos al inicio de línea
                 }
                 
                 // Listas y TODOs: detectar - [ ] o - [x] para TODOs, o - para bullets normales
-                '-' if !in_code_block && (result.is_empty() || result.ends_with('\n')) => {
-                    if chars.peek() == Some(&' ') {
-                        chars.next(); // Consumir el espacio después de -
-                        
-                        // Verificar si es un TODO: - [ ] o - [x]
-                        if chars.peek() == Some(&'[') {
-                            chars.next(); // Consumir [
-                            
-                            if let Some(&check_char) = chars.peek() {
-                                chars.next(); // Consumir el carácter dentro de []
-                                
-                                if chars.peek() == Some(&']') {
-                                    chars.next(); // Consumir ]
-                                    
-                                    // Verificar si hay espacio después de ]
-                                    if chars.peek() == Some(&' ') {
-                                        chars.next(); // Consumir el espacio
-                                        
-                                        // Es un TODO válido
-                                        if check_char == ' ' {
-                                            result.push_str("[TODO:unchecked] ");
-                                        } else if check_char == 'x' || check_char == 'X' {
-                                            result.push_str("[TODO:checked] ");
-                                        } else {
-                                            // No es un TODO válido, restaurar
-                                            result.push_str("- [");
-                                            result.push(check_char);
-                                            result.push_str("] ");
-                                        }
-                                    } else {
-                                        // No hay espacio después, no es TODO
-                                        result.push_str("- [");
-                                        result.push(check_char);
-                                        result.push(']');
-                                    }
-                                } else {
-                                    // No hay ] después, restaurar
-                                    result.push_str("- [");
-                                    result.push(check_char);
-                                }
-                            } else {
-                                // No hay nada después de [, restaurar
-                                result.push_str("- [");
-                            }
+                '-' if !in_code_block && at_line_start => {
+                    // Colectar los próximos caracteres para analizar el patrón
+                    let mut lookahead = Vec::new();
+                    let mut temp_chars = chars.clone();
+                    
+                    // Leer hasta 6 caracteres adelante (suficiente para "- [ ] ")
+                    for _ in 0..6 {
+                        if let Some(c) = temp_chars.next() {
+                            lookahead.push(c);
                         } else {
-                            // Lista normal (bullet)
-                            result.push('•');
-                            result.push(' ');
+                            break;
                         }
+                    }
+                    
+                    println!("DEBUG: Detectado '-' al inicio de línea. Posición en result: {}. at_line_start: {}", result.len(), at_line_start);
+                    
+                    // Verificar si es un TODO
+                    if lookahead.len() >= 5 
+                        && lookahead[0] == ' ' 
+                        && lookahead[1] == '[' 
+                        && lookahead[2] == ' ' 
+                        && lookahead[3] == ']'
+                        && lookahead[4] == ' ' {
+                        // Es un TODO sin marcar: "- [ ] "
+                        println!("DEBUG: TODO sin marcar detectado, lookahead: {:?}", lookahead);
+                        for _ in 0..5 {
+                            chars.next();
+                        }
+                        result.push_str("[TODO:unchecked] ");
+                        at_line_start = false; // Ya no estamos al inicio de línea
+                    } else if lookahead.len() >= 5 
+                        && lookahead[0] == ' ' 
+                        && lookahead[1] == '[' 
+                        && (lookahead[2] == 'x' || lookahead[2] == 'X')
+                        && lookahead[3] == ']'
+                        && lookahead[4] == ' ' {
+                        // Es un TODO marcado: "- [x] " o "- [X] "
+                        println!("DEBUG: TODO marcado detectado, lookahead: {:?}", lookahead);
+                        for _ in 0..5 {
+                            chars.next();
+                        }
+                        result.push_str("[TODO:checked] ");
+                        at_line_start = false; // Ya no estamos al inicio de línea
+                    } else if lookahead.len() >= 1 && lookahead[0] == ' ' {
+                        // Lista normal con bullet: "- "
+                        chars.next(); // Consumir el espacio
+                        result.push('•');
+                        result.push(' ');
+                        at_line_start = false; // Ya no estamos al inicio de línea
                     } else {
+                        // No es ni lista ni TODO, es solo un guión
+                        println!("DEBUG: No se detectó TODO ni lista. Lookahead: {:?}", lookahead);
                         result.push(ch);
+                        at_line_start = false; // Ya no estamos al inicio de línea
                     }
                 }
                 
                 // Blockquotes: remover >
-                '>' if !in_code_block && (result.is_empty() || result.ends_with('\n')) => {
+                '>' if !in_code_block && at_line_start => {
                     if chars.peek() == Some(&' ') {
                         chars.next(); // Saltar el espacio
                     }
+                    at_line_start = false; // Ya no estamos al inicio de línea
                 }
                 
                 // Links e Imágenes: [texto](url) o ![alt](url)
@@ -2696,13 +2780,24 @@ impl MainApp {
                 // Código inline: remover `
                 '`' if !in_code_block => {
                     // Omitir el `
+                    at_line_start = false;
+                }
+                
+                // Salto de línea: resetear flag de inicio de línea
+                '\n' => {
+                    result.push(ch);
+                    at_line_start = true; // Ahora estamos al inicio de la siguiente línea
                 }
                 
                 // Todo lo demás: mantener
-                _ => result.push(ch),
+                _ => {
+                    result.push(ch);
+                    at_line_start = false; // Ya no estamos al inicio de línea
+                }
             }
         }
         
+        println!("DEBUG render_clean_markdown: Salida: {:?}", result.lines().take(3).collect::<Vec<_>>());
         result
     }
     
@@ -2905,6 +3000,8 @@ impl MainApp {
             
             let mut marker_end = self.text_buffer.start_iter();
             marker_end.set_offset(end as i32);
+            let marker_text = self.text_buffer.text(&marker_start, &marker_end, false);
+            println!("DEBUG todos: marker_text='{}'", marker_text);
             
             // Eliminar el marcador del buffer
             self.text_buffer.delete(&mut marker_start.clone(), &mut marker_end.clone());
@@ -3213,34 +3310,48 @@ impl MainApp {
         let start = self.text_buffer.start_iter();
         let end = self.text_buffer.end_iter();
         let buffer_text = self.text_buffer.text(&start, &end, false).to_string();
+        println!("DEBUG todos: buffer_text first lines: {:?}", buffer_text.lines().take(5).collect::<Vec<_>>());
         
         // Obtener el texto original del buffer interno para encontrar las posiciones de TODOs
         let original_text = self.buffer.to_string();
+        println!("DEBUG todos: original_text first lines: {:?}", original_text.lines().take(5).collect::<Vec<_>>());
         
         // Encontrar todas las posiciones de TODOs en el texto ORIGINAL (no renderizado)
         let original_todo_positions = find_all_todos_in_text(&original_text);
+        println!("DEBUG todos: {} posiciones originales", original_todo_positions.len());
         
         // Buscar todos los marcadores TODO en el buffer renderizado
         let mut todos = Vec::new();
+        let buffer_chars: Vec<char> = buffer_text.chars().collect();
         let mut search_pos = 0;
+        
+        // Función auxiliar para convertir posición de byte a posición de carácter
+        let byte_to_char_pos = |byte_pos: usize| -> usize {
+            buffer_text[..byte_pos].chars().count()
+        };
         
         // Buscar [TODO:unchecked]
         while let Some(todo_start) = buffer_text[search_pos..].find("[TODO:unchecked]") {
-            let absolute_start = search_pos + todo_start;
-            todos.push((absolute_start, absolute_start + 16, false)); // 16 = longitud de "[TODO:unchecked]"
-            search_pos = absolute_start + 16;
+            let absolute_start_bytes = search_pos + todo_start;
+            let absolute_start_chars = byte_to_char_pos(absolute_start_bytes);
+            let marker_len = "[TODO:unchecked]".chars().count();
+            todos.push((absolute_start_chars, absolute_start_chars + marker_len, false));
+            search_pos = absolute_start_bytes + "[TODO:unchecked]".len();
         }
         
         // Buscar [TODO:checked]
         search_pos = 0;
         while let Some(todo_start) = buffer_text[search_pos..].find("[TODO:checked]") {
-            let absolute_start = search_pos + todo_start;
-            todos.push((absolute_start, absolute_start + 14, true)); // 14 = longitud de "[TODO:checked]"
-            search_pos = absolute_start + 14;
+            let absolute_start_bytes = search_pos + todo_start;
+            let absolute_start_chars = byte_to_char_pos(absolute_start_bytes);
+            let marker_len = "[TODO:checked]".chars().count();
+            todos.push((absolute_start_chars, absolute_start_chars + marker_len, true));
+            search_pos = absolute_start_bytes + "[TODO:checked]".len();
         }
         
         // Ordenar por posición (de mayor a menor para procesarlos en orden inverso)
         todos.sort_by(|a, b| b.0.cmp(&a.0));
+        println!("DEBUG todos: {} marcadores en display", todos.len());
         
         // Asociar cada marcador con su posición original usando índice
         let mut todo_index = original_todo_positions.len();
@@ -3257,6 +3368,7 @@ impl MainApp {
             
             // Eliminar el marcador del buffer
             self.text_buffer.delete(&mut marker_start.clone(), &mut marker_end.clone());
+            println!("DEBUG todos: eliminado marcador en {}..{} checked={} (todo_index={})", start, end, is_checked, todo_index);
             
             // Recrear el iterador de inicio después del delete
             let mut anchor_pos = self.text_buffer.start_iter();
@@ -3301,6 +3413,11 @@ impl MainApp {
             // Guardar referencia al widget
             self.todo_widgets.borrow_mut().push(checkbox);
         }
+
+        let start = self.text_buffer.start_iter();
+        let end = self.text_buffer.end_iter();
+        let remaining = self.text_buffer.text(&start, &end, false);
+        println!("DEBUG todos: texto tras procesar -> {:?}", remaining.lines().take(5).collect::<Vec<_>>());
     }
     
     /// Aplica estilos inline dentro de una línea (negrita, cursiva, código, links, tags)
@@ -4360,6 +4477,123 @@ impl MainApp {
         Ok(())
     }
     
+    /// Configura drag and drop para una fila específica del sidebar
+    fn setup_drag_and_drop_for_row(&self, row: &gtk::ListBoxRow, sender: &ComponentSender<Self>) {
+        use gtk::prelude::*;
+        use gtk::gdk;
+        
+        // Obtener información de la fila
+        let is_folder = unsafe {
+            row.data::<bool>("is_folder")
+                .map(|data| *data.as_ref())
+                .unwrap_or(false)
+        };
+        
+        let item_name = if is_folder {
+            unsafe {
+                row.data::<String>("folder_name")
+                    .map(|d| d.as_ref().clone())
+            }
+        } else {
+            // Obtener el nombre de la nota desde el label
+            row.child()
+                .and_then(|child| child.downcast::<gtk::Box>().ok())
+                .and_then(|box_widget| box_widget.first_child())
+                .and_then(|icon| icon.next_sibling())
+                .and_then(|label_widget| label_widget.downcast::<gtk::Label>().ok())
+                .map(|label| label.text().to_string())
+        };
+        
+        if item_name.is_none() {
+            return;
+        }
+        
+        let item_name = item_name.unwrap();
+        
+        // Para notas, obtener también la carpeta actual desde la base de datos
+        let target_folder = if !is_folder {
+            // Buscar la carpeta de esta nota en la base de datos
+            self.notes_db.get_note(&item_name)
+                .ok()
+                .flatten()
+                .and_then(|note_meta| note_meta.folder)
+        } else {
+            None
+        };
+        
+        // Configurar DragSource
+        let drag_source = gtk::DragSource::new();
+        drag_source.set_actions(gdk::DragAction::MOVE);
+        
+        let drag_item_name = item_name.clone();
+        let drag_is_folder = is_folder;
+        drag_source.connect_prepare(move |_source, _x, _y| {
+            let data_str = if drag_is_folder {
+                format!("folder:{}", drag_item_name)
+            } else {
+                format!("note:{}", drag_item_name)
+            };
+            
+            Some(gdk::ContentProvider::for_value(&data_str.to_value()))
+        });
+        
+        row.add_controller(drag_source);
+        
+        // Configurar DropTarget
+        let drop_target = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::MOVE);
+        
+        let sender_clone = sender.clone();
+        let target_item_name = item_name.clone();
+        let target_is_folder = is_folder;
+        let target_folder_path = target_folder.clone();
+        
+        drop_target.connect_drop(move |_target, value, _x, _y| {
+            if let Ok(data_str) = value.get::<String>() {
+                // Parsear el dato arrastrado
+                if let Some((drag_type, drag_name)) = data_str.split_once(':') {
+                    match (drag_type, target_is_folder) {
+                        ("note", true) => {
+                            // Arrastrar nota sobre carpeta -> mover nota a carpeta
+                            sender_clone.input(AppMsg::MoveNoteToFolder {
+                                note_name: drag_name.to_string(),
+                                folder_name: Some(target_item_name.clone()),
+                            });
+                            return true;
+                        },
+                        ("note", false) => {
+                            // Arrastrar nota sobre nota -> reordenar (y mover a la misma carpeta si es necesario)
+                            sender_clone.input(AppMsg::ReorderNotes {
+                                source_name: drag_name.to_string(),
+                                target_name: target_item_name.clone(),
+                            });
+                            return true;
+                        },
+                        ("folder", true) => {
+                            // Arrastrar carpeta sobre carpeta -> mover carpeta
+                            sender_clone.input(AppMsg::MoveFolder {
+                                folder_name: drag_name.to_string(),
+                                target_folder: Some(target_item_name.clone()),
+                            });
+                            return true;
+                        },
+                        ("folder", false) => {
+                            // Arrastrar carpeta sobre nota -> mover carpeta a la misma carpeta que la nota
+                            sender_clone.input(AppMsg::MoveFolder {
+                                folder_name: drag_name.to_string(),
+                                target_folder: target_folder_path.clone(),
+                            });
+                            return true;
+                        },
+                        _ => {}
+                    }
+                }
+            }
+            false
+        });
+        
+        row.add_controller(drop_target);
+    }
+    
     /// Rellena la lista de notas en el sidebar
     fn populate_notes_list(&self, sender: &ComponentSender<Self>) {
         use std::collections::HashMap;
@@ -4383,37 +4617,43 @@ impl MainApp {
             child = next;
         }
         
-        // Obtener todas las notas
-        if let Ok(notes) = self.notes_dir.list_notes() {
-            // Organizar por carpetas
+        // Obtener todas las notas desde la base de datos (ya ordenadas por order_index)
+        if let Ok(notes_metadata) = self.notes_db.list_notes(None) {
+            // Filtrar solo las notas que realmente existen en el filesystem
+            let existing_notes: Vec<_> = notes_metadata.into_iter()
+                .filter(|note_meta| {
+                    // Verificar que el archivo existe
+                    std::path::Path::new(&note_meta.path).exists()
+                })
+                .collect();
+            
+            // Organizar por carpetas manteniendo el orden de order_index
             let mut by_folder: HashMap<String, Vec<String>> = HashMap::new();
             
-            for note in notes {
-                let note_name = note.name().to_string();
-                let relative_path = note.path()
-                    .strip_prefix(self.notes_dir.root())
-                    .ok()
-                    .and_then(|p| p.parent())
-                    .and_then(|p| p.to_str())
-                    .unwrap_or("");
-                
-                let folder = if relative_path.is_empty() {
-                    String::from("/")
-                } else {
-                    relative_path.to_string()
-                };
-                
-                by_folder.entry(folder).or_insert_with(Vec::new).push(note_name);
+            for note_meta in existing_notes {
+                let folder = note_meta.folder.as_deref().unwrap_or("/").to_string();
+                by_folder.entry(folder).or_insert_with(Vec::new).push(note_meta.name);
             }
             
-            // Ordenar carpetas y notas
+            // Ordenar solo las carpetas, no las notas (las notas ya vienen ordenadas por order_index)
             let mut folders: Vec<_> = by_folder.keys().cloned().collect();
             folders.sort();
             
             for folder in folders {
                 if let Some(notes_in_folder) = by_folder.get(&folder) {
+                    // Saltar carpetas vacías
+                    if notes_in_folder.is_empty() {
+                        continue;
+                    }
+                    
                     // Si no es la raíz, mostrar carpeta como encabezado expandible
                     if folder != "/" {
+                        // Verificar que la carpeta existe en el filesystem
+                        let folder_path = self.notes_dir.root().join(&folder);
+                        if !folder_path.exists() || !folder_path.is_dir() {
+                            continue;
+                        }
+                        
                         let is_expanded = self.expanded_folders.contains(&folder);
                         let arrow_icon = if is_expanded { "pan-down-symbolic" } else { "pan-end-symbolic" };
                         
@@ -4436,10 +4676,21 @@ impl MainApp {
                             .pixel_size(16)
                             .build();
                         
+                        // Obtener solo el nombre de la carpeta (última parte del path)
+                        let folder_display_name = folder.split('/').last().unwrap_or(&folder);
+                        
+                        // Calcular nivel de indentación (número de '/' en el path)
+                        let depth = folder.matches('/').count();
+                        let indent = 8 + (depth * 16);
+                        
+                        folder_row.set_margin_start(indent as i32);
+                        
                         let folder_label = gtk::Label::builder()
-                            .label(&folder)
+                            .label(folder_display_name)
                             .xalign(0.0)
                             .hexpand(true)
+                            .ellipsize(gtk::pango::EllipsizeMode::End)
+                            .max_width_chars(30)
                             .build();
                         
                         folder_label.add_css_class("heading");
@@ -4463,6 +4714,9 @@ impl MainApp {
                         
                         self.notes_list.append(&list_row);
                         
+                        // Configurar drag-and-drop para la carpeta
+                        self.setup_drag_and_drop_for_row(&list_row, sender);
+                        
                         // Si no está expandida, no mostrar las notas
                         if !is_expanded {
                             continue;
@@ -4470,14 +4724,16 @@ impl MainApp {
                     }
                     
                     // Mostrar notas de esta carpeta (solo si está expandida)
-                    let mut sorted_notes = notes_in_folder.clone();
-                    sorted_notes.sort();
-                    
-                    for note_name in sorted_notes {
+                    // Las notas ya vienen ordenadas por order_index desde la base de datos
+                    for note_name in notes_in_folder {
+                        // Calcular indentación según profundidad de la carpeta
+                        let depth = if folder == "/" { 0 } else { folder.matches('/').count() };
+                        let note_indent = if folder == "/" { 12 } else { 8 + ((depth + 1) * 16) };
+                        
                         let row = gtk::Box::builder()
                             .orientation(gtk::Orientation::Horizontal)
                             .spacing(8)
-                            .margin_start(if folder == "/" { 12 } else { 32 })
+                            .margin_start(note_indent as i32)
                             .margin_end(12)
                             .margin_top(3)
                             .margin_bottom(3)
@@ -4568,12 +4824,29 @@ impl MainApp {
                                 .xalign(0.0)
                                 .hexpand(true)
                                 .ellipsize(gtk::pango::EllipsizeMode::End)
+                                .max_width_chars(40)
                                 .build();
                             
                             row.append(&label);
                         }
                         
-                        self.notes_list.append(&row);
+                        // Envolver en ListBoxRow para drag-and-drop
+                        let list_row = gtk::ListBoxRow::builder()
+                            .selectable(true)
+                            .activatable(true)
+                            .child(&row)
+                            .build();
+                        
+                        // Guardar el nombre de la nota en el row
+                        unsafe {
+                            list_row.set_data("note_name", note_name_owned.clone());
+                            list_row.set_data("is_folder", false);
+                        }
+                        
+                        self.notes_list.append(&list_row);
+                        
+                        // Configurar drag-and-drop para la nota
+                        self.setup_drag_and_drop_for_row(&list_row, sender);
                     }
                 }
             }
@@ -6253,5 +6526,264 @@ impl MainApp {
         
         // Actualizar placeholders
         self.search_entry.set_placeholder_text(Some(&i18n.t("search_placeholder")));
+    }
+
+    /// Mover una nota a una carpeta específica
+    fn move_note_to_folder(&mut self, note_name: &str, folder_name: Option<&str>, sender: &ComponentSender<Self>) {
+        println!("Moving note '{}' to folder {:?}", note_name, folder_name);
+
+        // Encontrar la nota en el directorio
+        if let Ok(Some(note)) = self.notes_dir.find_note(note_name) {
+            // Obtener la ruta actual de la nota
+            let current_path = note.path();
+
+            // Calcular la nueva ruta
+            let new_path = if let Some(folder) = folder_name {
+                // Mover a una carpeta específica
+                self.notes_dir.root().join(folder).join(format!("{}.md", note_name))
+            } else {
+                // Mover a la raíz
+                self.notes_dir.root().join(format!("{}.md", note_name))
+            };
+
+            // Solo mover si la ruta cambió
+            if current_path != new_path {
+                // Crear el directorio padre si no existe
+                if let Some(parent) = new_path.parent() {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        eprintln!("Error creando directorio: {}", e);
+                        return;
+                    }
+                }
+
+                // Mover el archivo
+                if let Err(e) = std::fs::rename(&current_path, &new_path) {
+                    eprintln!("Error moviendo nota: {}", e);
+                    return;
+                }
+
+                // Actualizar la base de datos si es necesario
+                // Actualizar la base de datos
+                if let Ok(Some(metadata)) = self.notes_db.get_note(note.name()) {
+                    if let Err(e) = self.notes_db.move_note_to_folder(metadata.id, folder_name.as_deref(), &new_path.to_string_lossy()) {
+                        eprintln!("Error actualizando base de datos: {}", e);
+                    }
+                }
+
+                // Refrescar el sidebar
+                sender.input(AppMsg::RefreshSidebar);
+            }
+        } else {
+            eprintln!("Nota '{}' no encontrada", note_name);
+        }
+    }
+
+    /// Reordenar notas dentro de la misma carpeta (cambiar el orden alfabético)
+    fn reorder_notes(&mut self, source_name: &str, target_name: &str, sender: &ComponentSender<Self>) {
+        println!("Reordering notes: '{}' relative to '{}'", source_name, target_name);
+
+        // Obtener metadata de source y target
+        let source_meta = match self.notes_db.get_note(source_name) {
+            Ok(Some(meta)) => meta,
+            _ => {
+                eprintln!("No se encontró la nota source: {}", source_name);
+                return;
+            }
+        };
+        
+        let target_meta = match self.notes_db.get_note(target_name) {
+            Ok(Some(meta)) => meta,
+            _ => {
+                eprintln!("No se encontró la nota target: {}", target_name);
+                return;
+            }
+        };
+        
+        // Si no están en la misma carpeta, mover primero
+        if source_meta.folder != target_meta.folder {
+            println!("Moving note to target folder first");
+            self.move_note_to_folder(source_name, target_meta.folder.as_deref(), sender);
+            
+            // Recargar metadata después de mover
+            let source_meta = match self.notes_db.get_note(source_name) {
+                Ok(Some(meta)) => meta,
+                _ => {
+                    eprintln!("No se pudo recargar metadata de source después de mover");
+                    return;
+                }
+            };
+            
+            // Continuar con el reordenamiento
+            self.reorder_notes_in_same_folder(source_meta, &target_meta, sender);
+        } else {
+            // Ya están en la misma carpeta, solo reordenar
+            self.reorder_notes_in_same_folder(source_meta, &target_meta, sender);
+        }
+    }
+    
+    /// Reordena notas que ya están en la misma carpeta
+    fn reorder_notes_in_same_folder(&mut self, source_meta: crate::core::database::NoteMetadata, target_meta: &crate::core::database::NoteMetadata, sender: &ComponentSender<Self>) {
+        let source_name = &source_meta.name;
+        let target_name = &target_meta.name;
+        
+        // Obtener todas las notas de esta carpeta
+        let folder = source_meta.folder.as_deref();
+        let mut notes = match self.notes_db.list_notes(folder) {
+            Ok(notes) => notes,
+            Err(e) => {
+                eprintln!("Error obteniendo notas de la carpeta: {}", e);
+                return;
+            }
+        };
+        
+        // Encontrar índices de source y target
+        let source_idx = notes.iter().position(|n| &n.name == source_name);
+        let target_idx = notes.iter().position(|n| &n.name == target_name);
+        
+        if let (Some(src_idx), Some(tgt_idx)) = (source_idx, target_idx) {
+            // Si la source y target son la misma, no hacer nada
+            if src_idx == tgt_idx {
+                return;
+            }
+            
+            println!("Reordenando: source_idx={}, target_idx={}", src_idx, tgt_idx);
+            
+            // Remover source de su posición actual
+            let source = notes.remove(src_idx);
+            
+            // Calcular la posición de inserción
+            // Queremos tomar la posición del target, empujándolo
+            let insert_pos = if src_idx < tgt_idx {
+                // Source estaba ANTES de target (arrastrando hacia abajo)
+                // Al remover source, target se desplaza -1: ahora está en tgt_idx - 1
+                // Queremos tomar la posición ORIGINAL del target (antes de que se moviera)
+                // Para eso insertamos en tgt_idx (que es donde estaba target originalmente)
+                // Esto empuja al target hacia arriba (a la posición tgt_idx)
+                tgt_idx
+            } else {
+                // Source estaba DESPUÉS de target (arrastrando hacia arriba)  
+                // Target no se movió al remover source (sigue en tgt_idx)
+                // Insertamos en tgt_idx para tomar su posición y empujarlo hacia abajo
+                tgt_idx
+            };
+            
+            println!("Insertando en posición: {}", insert_pos);
+            
+            // Insertar en la posición calculada
+            notes.insert(insert_pos, source);
+            
+            // Actualizar order_index de todas las notas de esta carpeta
+            for (idx, note) in notes.iter().enumerate() {
+                if let Err(e) = self.notes_db.update_note_order(note.id, idx as i32) {
+                    eprintln!("Error actualizando order_index para {}: {}", note.name, e);
+                }
+            }
+            
+            println!("Notas reordenadas exitosamente");
+        }
+
+        sender.input(AppMsg::RefreshSidebar);
+    }
+
+    /// Mover una carpeta a otra carpeta
+    fn move_folder(&mut self, folder_name: &str, target_folder: Option<&str>, sender: &ComponentSender<Self>) {
+        println!("Moving folder '{}' to {:?}", folder_name, target_folder);
+
+        // Construir la ruta de la carpeta fuente
+        let source_path = self.notes_dir.root().join(folder_name);
+
+        // Verificar que la carpeta fuente existe
+        if !source_path.exists() || !source_path.is_dir() {
+            eprintln!("Carpeta fuente '{}' no existe en {:?}", folder_name, source_path);
+            return;
+        }
+        
+        // Obtener solo el nombre base de la carpeta (última parte del path)
+        let folder_base_name = folder_name.split('/').last().unwrap_or(folder_name);
+
+        // Calcular la nueva ruta
+        let new_path = if let Some(target) = target_folder {
+            if target.is_empty() || target == "/" {
+                // Mover a la raíz
+                self.notes_dir.root().join(folder_base_name)
+            } else {
+                // Mover a una carpeta específica
+                self.notes_dir.root().join(target).join(folder_base_name)
+            }
+        } else {
+            // Mover a la raíz
+            self.notes_dir.root().join(folder_base_name)
+        };
+        
+        println!("Source path: {:?}, New path: {:?}", source_path, new_path);
+
+        // Solo mover si la ruta cambió
+        if source_path != new_path {
+            // Crear el directorio padre si no existe
+            if let Some(parent) = new_path.parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    eprintln!("Error creando directorio padre: {}", e);
+                    return;
+                }
+            }
+
+            // Mover la carpeta completa
+            if let Err(e) = std::fs::rename(&source_path, &new_path) {
+                eprintln!("Error moviendo carpeta: {}", e);
+                return;
+            }
+
+            // Actualizar todas las notas en la base de datos que estaban en esta carpeta
+            if let Ok(notes) = self.notes_db.list_notes(None) {
+                for note in notes {
+                    // Verificar si la nota está en la carpeta que se está moviendo
+                    if let Some(ref note_folder) = note.folder {
+                        // La nota está en la carpeta si note_folder == folder_name o empieza con folder_name/
+                        if note_folder == folder_name || note_folder.starts_with(&format!("{}/", folder_name)) {
+                            // Calcular la nueva carpeta para esta nota
+                            let new_folder = if let Some(target) = target_folder {
+                                if target.is_empty() || target == "/" {
+                                    // Moviendo a raíz
+                                    if note_folder == folder_name {
+                                        folder_base_name.to_string()
+                                    } else {
+                                        // Subcarpeta dentro de la carpeta movida
+                                        note_folder.replace(folder_name, folder_base_name)
+                                    }
+                                } else {
+                                    // Moviendo a otra carpeta
+                                    if note_folder == folder_name {
+                                        format!("{}/{}", target, folder_base_name)
+                                    } else {
+                                        // Subcarpeta dentro de la carpeta movida
+                                        note_folder.replace(folder_name, &format!("{}/{}", target, folder_base_name))
+                                    }
+                                }
+                            } else {
+                                // Moviendo a raíz
+                                if note_folder == folder_name {
+                                    folder_base_name.to_string()
+                                } else {
+                                    note_folder.replace(folder_name, folder_base_name)
+                                }
+                            };
+                            
+                            // Calcular la nueva ruta del archivo
+                            let new_note_path = self.notes_dir.root().join(&new_folder).join(format!("{}.md", note.name));
+                            
+                            println!("Updating note {} from folder '{}' to '{}'", note.name, note_folder, new_folder);
+
+                            // Actualizar en la base de datos
+                            if let Err(e) = self.notes_db.move_note_to_folder(note.id, Some(&new_folder), new_note_path.to_str().unwrap_or("")) {
+                                eprintln!("Error actualizando nota {}: {}", note.name, e);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Refrescar el sidebar
+            sender.input(AppMsg::RefreshSidebar);
+        }
     }
 }
