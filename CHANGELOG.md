@@ -8,11 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.1] - 2025-11-02
 
 ### Fixed
-- **Critical**: Fixed Omarchy theme not loading when installed from AUR or system-wide
+- **Critical**: Fixed Omarchy theme not loading when installed from AUR
   - CSS loading order improved: Omarchy theme variables now load before app styles
+  - Synchronized `load_theme_css()` between `main.rs` and `app.rs`
+  - Theme watcher now properly reloads CSS in correct order
   - Better theme detection and error messages
 - Removed invalid `text-align` CSS property that caused GTK warnings
 - Improved debug output to help diagnose theme loading issues
+- **Real-time theme switching now works**: Change Omarchy theme and see NotNative update instantly
 
 ### Changed
 - Enhanced theme loading mechanism for better reliability
