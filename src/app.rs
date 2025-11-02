@@ -50,8 +50,16 @@ struct YouTubeVideoSpan {
 }
 
 #[derive(Debug, Clone)]
+struct TodoItem {
+    completed: bool,
+    indent_level: usize, // 0 = nivel principal, 1 = primera subtarea, etc.
+    text: String,
+}
+
+#[derive(Debug, Clone)]
 struct TodoSection {
     title: String,
+    todos: Vec<TodoItem>,
     total: usize,
     completed: usize,
     percentage: usize,
@@ -407,23 +415,45 @@ impl SimpleComponent for MainApp {
                                 set_popover = &gtk::Popover {
                                     add_css_class: "tags-popover",
                                     set_autohide: true,
+                                    set_has_arrow: false,
+                                    set_size_request: (300, 400),
+                                    set_default_widget: gtk::Widget::NONE,
 
                                     #[wrap(Some)]
-                                    set_child = &gtk::Box {
-                                        set_orientation: gtk::Orientation::Vertical,
-                                        set_spacing: 8,
-                                        set_margin_all: 12,
-                                        set_width_request: 280,
+                                    set_child = &gtk::ScrolledWindow {
+                                        set_width_request: 300,
+                                        set_height_request: 400,
+                                        set_max_content_width: 300,
+                                        set_max_content_height: 400,
+                                        set_min_content_width: 300,
+                                        set_min_content_height: 400,
+                                        set_propagate_natural_height: false,
+                                        set_propagate_natural_width: false,
+                                        set_policy: (gtk::PolicyType::Never, gtk::PolicyType::Automatic),
+                                        set_hscrollbar_policy: gtk::PolicyType::Never,
+                                        set_vscrollbar_policy: gtk::PolicyType::Automatic,
+                                        set_kinetic_scrolling: true,
+                                        set_overlay_scrolling: true,
 
-                                        append = &gtk::Label {
-                                            set_markup: "<b>TODOs</b>",
-                                            set_xalign: 0.0,
-                                            set_margin_bottom: 4,
-                                        },
+                                        #[wrap(Some)]
+                                        set_child = &gtk::Box {
+                                            set_orientation: gtk::Orientation::Vertical,
+                                            set_spacing: 8,
+                                            set_margin_all: 12,
+                                            set_hexpand: false,
+                                            set_vexpand: false,
+                                            set_width_request: 276,
 
-                                        append = todos_list_box = &gtk::ListBox {
-                                            add_css_class: "tags-list",
-                                            set_selection_mode: gtk::SelectionMode::None,
+                                            append = &gtk::Label {
+                                                set_markup: "<b>TODOs</b>",
+                                                set_xalign: 0.0,
+                                                set_margin_bottom: 4,
+                                            },
+
+                                            append = todos_list_box = &gtk::ListBox {
+                                                add_css_class: "tags-list",
+                                                set_selection_mode: gtk::SelectionMode::None,
+                                            },
                                         },
                                     },
                                 },
@@ -545,18 +575,50 @@ impl SimpleComponent for MainApp {
         context_menu.set_has_arrow(false);
         context_menu.add_css_class("context-menu");
 
-        // Intentar cargar la nota "bienvenida" o crearla si no existe
-        let (initial_buffer, current_note) = match notes_dir.find_note("bienvenida") {
-            Ok(Some(note)) => match note.read() {
-                Ok(content) => {
-                    println!("Nota 'bienvenida' cargada");
-                    (NoteBuffer::from_text(&content), Some(note))
+        // Intentar cargar la última nota abierta, si no la de bienvenida, o crearla si no existe
+        let (initial_buffer, current_note) = {
+            // Primero intentar cargar la última nota abierta
+            if let Some(last_note) = notes_config.get_last_opened_note() {
+                match notes_dir.find_note(last_note) {
+                    Ok(Some(note)) => match note.read() {
+                        Ok(content) => {
+                            println!("Última nota abierta cargada: {}", last_note);
+                            (NoteBuffer::from_text(&content), Some(note))
+                        }
+                        Err(_) => {
+                            // Si no se puede leer, intentar con bienvenida
+                            try_load_or_create_welcome(&notes_dir)
+                        }
+                    },
+                    _ => {
+                        // Si la última nota no existe, intentar con bienvenida
+                        try_load_or_create_welcome(&notes_dir)
+                    }
                 }
-                Err(_) => (NoteBuffer::new(), None),
-            },
-            _ => {
-                // Crear nota de bienvenida
-                let welcome_content = "# Bienvenido a NotNative
+            } else {
+                // No hay última nota guardada, intentar con bienvenida
+                try_load_or_create_welcome(&notes_dir)
+            }
+        };
+
+        // Helper function para cargar o crear bienvenida
+        fn try_load_or_create_welcome(
+            notes_dir: &NotesDirectory,
+        ) -> (NoteBuffer, Option<NoteFile>) {
+            match notes_dir.find_note("bienvenida") {
+                Ok(Some(note)) => match note.read() {
+                    Ok(content) => {
+                        println!("Nota 'bienvenida' cargada");
+                        (NoteBuffer::from_text(&content), Some(note))
+                    }
+                    Err(_) => (NoteBuffer::new(), None),
+                },
+                _ => {
+                    // Solo crear la nota de bienvenida si es primera vez (ninguna otra nota existe)
+                    match notes_dir.list_notes() {
+                        Ok(notes) if notes.is_empty() => {
+                            // Primera vez usando la app, crear nota de bienvenida
+                            let welcome_content = "# Bienvenido a NotNative
 
 Esta es tu primera nota. NotNative guarda cada nota como un archivo .md independiente.
 
@@ -571,15 +633,25 @@ Esta es tu primera nota. NotNative guarda cada nota como un archivo .md independ
 
 Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
 ";
-                match notes_dir.create_note("bienvenida", welcome_content) {
-                    Ok(note) => {
-                        println!("Nota de bienvenida creada");
-                        (NoteBuffer::from_text(welcome_content), Some(note))
+                            match notes_dir.create_note("bienvenida", welcome_content) {
+                                Ok(note) => {
+                                    println!("Nota de bienvenida creada");
+                                    (NoteBuffer::from_text(welcome_content), Some(note))
+                                }
+                                Err(_) => (NoteBuffer::new(), None),
+                            }
+                        }
+                        _ => {
+                            // Ya hay otras notas, no crear bienvenida
+                            println!(
+                                "Nota de bienvenida no existe y hay otras notas, iniciando vacío"
+                            );
+                            (NoteBuffer::new(), None)
+                        }
                     }
-                    Err(_) => (NoteBuffer::new(), None),
                 }
             }
-        };
+        }
 
         // Crear popover de autocompletado de tags ANTES del modelo
         let completion_list_box = gtk::ListBox::new();
@@ -716,6 +788,12 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
         // Sincronizar contenido inicial con la vista
         model.sync_to_view();
         model.update_status_bar(&sender);
+
+        // Actualizar popovers si hay una nota cargada
+        if model.current_note.is_some() {
+            model.refresh_tags_display_with_sender(&sender);
+            model.refresh_todos_summary();
+        }
 
         // Configurar autoguardado cada 5 segundos
         gtk::glib::timeout_add_seconds_local(
@@ -2816,6 +2894,7 @@ impl MainApp {
         let mut chars = text.chars().peekable();
         let mut in_code_block = false;
         let mut at_line_start = true; // Flag para saber si estamos al inicio de una línea
+        let mut indent_spaces = 0; // Contador de espacios de indentación al inicio de línea
 
         while let Some(ch) = chars.next() {
             match ch {
@@ -2880,9 +2959,10 @@ impl MainApp {
                     }
 
                     println!(
-                        "DEBUG: Detectado '-' al inicio de línea. Posición en result: {}. at_line_start: {}",
+                        "DEBUG: Detectado '-' al inicio de línea. Posición en result: {}. at_line_start: {}, indent_spaces: {}",
                         result.len(),
-                        at_line_start
+                        at_line_start,
+                        indent_spaces
                     );
 
                     // Verificar si es un TODO
@@ -2895,9 +2975,20 @@ impl MainApp {
                     {
                         // Es un TODO sin marcar: "- [ ] "
                         println!(
-                            "DEBUG: TODO sin marcar detectado, lookahead: {:?}",
-                            lookahead
+                            "DEBUG: TODO sin marcar detectado con {} espacios de indentación",
+                            indent_spaces
                         );
+
+                        // Si tiene indentación (subtarea), agregar indicador visual
+                        if indent_spaces > 0 {
+                            // Reemplazar los últimos espacios por el carácter de árbol
+                            let tree_indicator = "└─ ";
+                            // Calcular cuántos caracteres remover (normalmente 2 o 3 espacios finales)
+                            let chars_to_remove = 2.min(result.len());
+                            result.truncate(result.len() - chars_to_remove);
+                            result.push_str(tree_indicator);
+                        }
+
                         for _ in 0..5 {
                             chars.next();
                         }
@@ -2911,7 +3002,20 @@ impl MainApp {
                         && lookahead[4] == ' '
                     {
                         // Es un TODO marcado: "- [x] " o "- [X] "
-                        println!("DEBUG: TODO marcado detectado, lookahead: {:?}", lookahead);
+                        println!(
+                            "DEBUG: TODO marcado detectado con {} espacios de indentación",
+                            indent_spaces
+                        );
+
+                        // Si tiene indentación (subtarea), agregar indicador visual
+                        if indent_spaces > 0 {
+                            // Reemplazar los últimos espacios por el carácter de árbol
+                            let tree_indicator = "└─ ";
+                            let chars_to_remove = 2.min(result.len());
+                            result.truncate(result.len() - chars_to_remove);
+                            result.push_str(tree_indicator);
+                        }
+
                         for _ in 0..5 {
                             chars.next();
                         }
@@ -3048,12 +3152,21 @@ impl MainApp {
                 '\n' => {
                     result.push(ch);
                     at_line_start = true; // Ahora estamos al inicio de la siguiente línea
+                    indent_spaces = 0; // Resetear contador de espacios
+                }
+
+                // Espacios al inicio de línea (indentación): mantener pero no cambiar at_line_start
+                ' ' if at_line_start && !in_code_block => {
+                    result.push(ch);
+                    indent_spaces += 1;
+                    // Mantener at_line_start = true para detectar TODOs con indentación
                 }
 
                 // Todo lo demás: mantener
                 _ => {
                     result.push(ch);
                     at_line_start = false; // Ya no estamos al inicio de línea
+                    indent_spaces = 0; // Resetear contador
                 }
             }
         }
@@ -4283,16 +4396,43 @@ impl MainApp {
         ));
         row_box.append(&title_label);
 
+        // Calcular estadísticas de subtareas
+        let main_tasks = section.todos.iter().filter(|t| t.indent_level == 0).count();
+        let main_completed = section
+            .todos
+            .iter()
+            .filter(|t| t.indent_level == 0 && t.completed)
+            .count();
+        let subtasks = section.todos.iter().filter(|t| t.indent_level > 0).count();
+        let subtasks_completed = section
+            .todos
+            .iter()
+            .filter(|t| t.indent_level > 0 && t.completed)
+            .count();
+
         // Progreso y porcentaje en una sola línea
         let progress_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         progress_box.set_margin_top(2);
 
-        let progress_label = gtk::Label::new(Some(&format!(
-            "{}/{} {}",
-            section.completed,
-            section.total,
-            i18n.t("completed")
-        )));
+        let progress_text = if subtasks > 0 {
+            format!(
+                "{}/{} {} · {}/{} subtareas",
+                section.completed,
+                section.total,
+                i18n.t("completed"),
+                subtasks_completed,
+                subtasks
+            )
+        } else {
+            format!(
+                "{}/{} {}",
+                section.completed,
+                section.total,
+                i18n.t("completed")
+            )
+        };
+
+        let progress_label = gtk::Label::new(Some(&progress_text));
         progress_label.set_xalign(0.0);
         progress_label.add_css_class("dim-label");
         progress_label.set_hexpand(true);
@@ -4318,6 +4458,196 @@ impl MainApp {
         progress_bar.set_show_text(false);
         row_box.append(&progress_bar);
 
+        // Separar tareas pendientes y completadas
+        let pending_todos: Vec<&TodoItem> = section.todos.iter().filter(|t| !t.completed).collect();
+        let completed_todos: Vec<&TodoItem> =
+            section.todos.iter().filter(|t| t.completed).collect();
+
+        // Lista de TODOs individuales con indentación y líneas de conexión
+        let todos_container = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        todos_container.set_margin_top(4);
+
+        println!(
+            "DEBUG: Mostrando {} TODOs para sección '{}'",
+            section.todos.len(),
+            section.title
+        );
+
+        // Mostrar primero las tareas pendientes
+        for (index, todo) in pending_todos.iter().enumerate() {
+            println!(
+                "DEBUG: TODO pendiente #{}: '{}' nivel {} completado {}",
+                index, todo.text, todo.indent_level, todo.completed
+            );
+
+            // Box horizontal que contendrá la línea de conexión y el contenido del TODO
+            let todo_wrapper = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+
+            // Si es una subtarea, agregar línea de conexión visual
+            if todo.indent_level > 0 {
+                println!(
+                    "DEBUG: Agregando línea de árbol para subtarea nivel {}",
+                    todo.indent_level
+                );
+                // Crear box para las líneas de conexión
+                let line_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                let base_indent = 4; // Margen base
+
+                // Agregar espaciado para cada nivel de indentación
+                for level in 0..todo.indent_level {
+                    let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                    spacer.set_width_request(12); // 12px por nivel
+                    line_box.append(&spacer);
+                }
+
+                // Línea vertical y horizontal (carácter de árbol)
+                let tree_char = gtk::Label::new(Some("└─"));
+                tree_char.add_css_class("dim-label");
+                tree_char.set_xalign(0.0);
+                line_box.append(&tree_char);
+
+                todo_wrapper.append(&line_box);
+            } else {
+                // Para tareas principales, solo agregar margen
+                let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                spacer.set_width_request(4);
+                todo_wrapper.append(&spacer);
+            }
+
+            // Contenido del TODO
+            let todo_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            todo_row.set_hexpand(false); // No expandir
+
+            // Icono de checkbox
+            let icon_name = if todo.completed {
+                "checkbox-checked-symbolic"
+            } else {
+                "checkbox-symbolic"
+            };
+            let checkbox_icon = gtk::Image::from_icon_name(icon_name);
+            checkbox_icon.set_pixel_size(12);
+            todo_row.append(&checkbox_icon);
+
+            // Texto de la tarea (truncado si es muy largo)
+            let text_label = gtk::Label::new(Some(&todo.text));
+            text_label.set_xalign(0.0);
+            text_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            text_label.set_max_width_chars(22); // Reducido más para compensar indentación
+            text_label.set_wrap(false);
+            text_label.set_width_request(180); // Ancho fijo reducido
+            text_label.set_hexpand(false); // No expandir
+            text_label.add_css_class("dim-label");
+
+            // Si está completado, agregar estilo tachado
+            if todo.completed {
+                text_label.set_markup(&format!("<s>{}</s>", glib::markup_escape_text(&todo.text)));
+            }
+
+            todo_row.append(&text_label);
+            todo_wrapper.append(&todo_row);
+
+            todos_container.append(&todo_wrapper);
+        }
+
+        // Si hay tareas completadas, agregar sección colapsable
+        if !completed_todos.is_empty() {
+            // Crear revealer para las tareas completadas
+            let completed_revealer = gtk::Revealer::new();
+            completed_revealer.set_reveal_child(false); // Oculto por defecto
+            completed_revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
+            completed_revealer.set_transition_duration(150); // Reducido a 150ms para más suavidad
+
+            // Container para las tareas completadas
+            let completed_container = gtk::Box::new(gtk::Orientation::Vertical, 2);
+
+            for todo in completed_todos.iter() {
+                let todo_wrapper = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+
+                // Si es una subtarea, agregar línea de conexión visual
+                if todo.indent_level > 0 {
+                    let line_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+
+                    for level in 0..todo.indent_level {
+                        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                        spacer.set_width_request(12);
+                        line_box.append(&spacer);
+                    }
+
+                    let tree_char = gtk::Label::new(Some("└─"));
+                    tree_char.add_css_class("dim-label");
+                    tree_char.set_xalign(0.0);
+                    line_box.append(&tree_char);
+
+                    todo_wrapper.append(&line_box);
+                } else {
+                    let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                    spacer.set_width_request(4);
+                    todo_wrapper.append(&spacer);
+                }
+
+                let todo_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+                todo_row.set_hexpand(false); // No expandir
+
+                let checkbox_icon = gtk::Image::from_icon_name("checkbox-checked-symbolic");
+                checkbox_icon.set_pixel_size(12);
+                todo_row.append(&checkbox_icon);
+
+                let text_label = gtk::Label::new(Some(&todo.text));
+                text_label.set_xalign(0.0);
+                text_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                text_label.set_max_width_chars(22); // Reducido más para compensar indentación
+                text_label.set_wrap(false);
+                text_label.set_width_request(180); // Ancho fijo reducido
+                text_label.set_hexpand(false); // No expandir
+                text_label.add_css_class("dim-label");
+                text_label.set_markup(&format!("<s>{}</s>", glib::markup_escape_text(&todo.text)));
+
+                todo_row.append(&text_label);
+                todo_wrapper.append(&todo_row);
+                completed_container.append(&todo_wrapper);
+            }
+
+            completed_revealer.set_child(Some(&completed_container));
+
+            // Botón para expandir/colapsar tareas completadas
+            let toggle_button = gtk::Button::new();
+            toggle_button.add_css_class("flat");
+            toggle_button.set_margin_top(4);
+
+            let button_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            button_box.set_halign(gtk::Align::Start);
+
+            let icon = gtk::Image::from_icon_name("pan-end-symbolic");
+            icon.set_pixel_size(12);
+            button_box.append(&icon);
+
+            let label = gtk::Label::new(Some(&format!("{} completadas", completed_todos.len())));
+            label.add_css_class("dim-label");
+            button_box.append(&label);
+
+            toggle_button.set_child(Some(&button_box));
+
+            // Conectar señal para expandir/colapsar
+            let revealer_clone = completed_revealer.clone();
+            let icon_clone = icon.clone();
+            toggle_button.connect_clicked(move |_| {
+                let is_revealed = revealer_clone.reveals_child();
+                revealer_clone.set_reveal_child(!is_revealed);
+
+                // Cambiar icono
+                if is_revealed {
+                    icon_clone.set_icon_name(Some("pan-end-symbolic"));
+                } else {
+                    icon_clone.set_icon_name(Some("pan-down-symbolic"));
+                }
+            });
+
+            todos_container.append(&toggle_button);
+            todos_container.append(&completed_revealer);
+        }
+
+        row_box.append(&todos_container);
+
         row_box
     }
 
@@ -4326,7 +4656,7 @@ impl MainApp {
         let mut sections = Vec::new();
         let i18n = self.i18n.borrow();
         let mut current_section = i18n.t("no_section");
-        let mut current_todos: Vec<bool> = Vec::new(); // true = completado, false = pendiente
+        let mut current_todos: Vec<TodoItem> = Vec::new();
 
         for line in lines {
             // Detectar encabezados (h1, h2, h3)
@@ -4351,12 +4681,34 @@ impl MainApp {
                 current_section = line.trim_start_matches('#').trim().to_string();
             }
 
-            // Detectar TODOs
+            // Detectar TODOs con indentación
+            // Contar espacios al inicio para determinar nivel de indentación
+            let leading_spaces = line.chars().take_while(|c| *c == ' ').count();
+            let indent_level = leading_spaces / 2; // 2 espacios = 1 nivel de indentación
+
             let trimmed = line.trim_start();
             if trimmed.starts_with("- [ ]") {
-                current_todos.push(false);
+                let text = trimmed[5..].trim().to_string();
+                println!(
+                    "DEBUG TODO: '{}' con {} espacios, nivel {}",
+                    text, leading_spaces, indent_level
+                );
+                current_todos.push(TodoItem {
+                    completed: false,
+                    indent_level,
+                    text,
+                });
             } else if trimmed.starts_with("- [x]") || trimmed.starts_with("- [X]") {
-                current_todos.push(true);
+                let text = trimmed[5..].trim().to_string();
+                println!(
+                    "DEBUG TODO completado: '{}' con {} espacios, nivel {}",
+                    text, leading_spaces, indent_level
+                );
+                current_todos.push(TodoItem {
+                    completed: true,
+                    indent_level,
+                    text,
+                });
             }
         }
 
@@ -4368,9 +4720,9 @@ impl MainApp {
         sections
     }
 
-    fn create_todo_section(&self, title: &str, todos: &[bool]) -> TodoSection {
+    fn create_todo_section(&self, title: &str, todos: &[TodoItem]) -> TodoSection {
         let total = todos.len();
-        let completed = todos.iter().filter(|&&done| done).count();
+        let completed = todos.iter().filter(|todo| todo.completed).count();
         let percentage = if total > 0 {
             (completed * 100) / total
         } else {
@@ -4379,6 +4731,7 @@ impl MainApp {
 
         TodoSection {
             title: title.to_string(),
+            todos: todos.to_vec(),
             total,
             completed,
             percentage,
@@ -4768,6 +5121,13 @@ impl MainApp {
         self.buffer = NoteBuffer::from_text(&content);
         self.cursor_position = 0;
         self.current_note = Some(note);
+
+        // Guardar como última nota abierta
+        self.notes_config
+            .set_last_opened_note(Some(name.to_string()));
+        if let Err(e) = self.notes_config.save(NotesConfig::default_path()) {
+            eprintln!("Error guardando última nota abierta: {}", e);
+        }
 
         println!("Nota cargada: {}", name);
         Ok(())
@@ -6792,21 +7152,36 @@ impl MainApp {
 
 /// Encuentra todas las posiciones de TODOs en el texto original
 /// Devuelve un vector con las posiciones de inicio de cada `- [ ]` o `- [x]`
+/// Ahora también detecta TODOs con indentación (espacios al inicio)
 fn find_all_todos_in_text(text: &str) -> Vec<usize> {
     let chars: Vec<char> = text.chars().collect();
     let mut positions = Vec::new();
 
     let mut pos = 0;
     while pos + 4 < chars.len() {
-        // Buscar el patrón - [ ] o - [x]
+        // Saltar espacios al inicio (indentación)
+        let start_pos = pos;
+        while pos < chars.len() && chars[pos] == ' ' {
+            pos += 1;
+        }
+
+        // Verificar si hay suficiente espacio para el patrón TODO
+        if pos + 4 >= chars.len() {
+            break;
+        }
+
+        // Buscar el patrón - [ ] o - [x] después de la indentación
         if chars[pos] == '-'
             && chars[pos + 1] == ' '
             && chars[pos + 2] == '['
             && (chars[pos + 3] == ' ' || chars[pos + 3] == 'x' || chars[pos + 3] == 'X')
             && chars[pos + 4] == ']'
         {
-            positions.push(pos);
+            positions.push(pos); // Guardar la posición del '-', no del inicio de la línea
             pos += 5; // Saltar el TODO completo
+        } else if pos > start_pos {
+            // Si saltamos espacios pero no encontramos TODO, retroceder
+            pos = start_pos + 1;
         } else {
             pos += 1;
         }

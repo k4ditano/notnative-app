@@ -19,6 +19,9 @@ pub struct NotesConfig {
     /// Salida de audio preferida (sink de PulseAudio)
     #[serde(default)]
     pub audio_output_sink: Option<String>,
+    /// Última nota abierta
+    #[serde(default)]
+    pub last_opened_note: Option<String>,
 }
 
 impl Default for NotesConfig {
@@ -36,6 +39,7 @@ impl NotesConfig {
             language: None,
             workspace_dir: None,
             audio_output_sink: None,
+            last_opened_note: None,
         }
     }
 
@@ -145,6 +149,16 @@ impl NotesConfig {
     /// Establece la salida de audio preferida
     pub fn set_audio_output_sink(&mut self, sink: Option<String>) {
         self.audio_output_sink = sink;
+    }
+
+    /// Obtiene la última nota abierta
+    pub fn get_last_opened_note(&self) -> Option<&str> {
+        self.last_opened_note.as_deref()
+    }
+
+    /// Establece la última nota abierta
+    pub fn set_last_opened_note(&mut self, note: Option<String>) {
+        self.last_opened_note = note;
     }
 
     /// Ruta por defecto del archivo de configuración
