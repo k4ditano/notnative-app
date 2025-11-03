@@ -1,23 +1,21 @@
+use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+use thiserror::Error;
 use libmpv2::Mpv;
 use rustypipe::{client::RustyPipe, param::search_filter::SearchFilter};
-use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use thiserror::Error;
 
 /// Estado del reproductor de música
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerState {
-    Idle,    // Sin canción cargada
-    Loading, // Cargando canción
-    Playing, // Reproduciendo
-    Paused,  // En pausa
-    Error,   // Error en reproducción
+    Idle,              // Sin canción cargada
+    Loading,           // Cargando canción
+    Playing,           // Reproduciendo
+    Paused,            // En pausa
+    Error,             // Error en reproducción
 }
 
 /// Información de una canción
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Song {
     pub title: String,
     pub artists: Vec<String>,
@@ -34,157 +32,10 @@ impl Song {
             duration: None,
         }
     }
-
+    
     pub fn artist_names(&self) -> String {
         self.artists.join(", ")
     }
-}
-
-/// Una playlist de canciones
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Playlist {
-    pub name: String,
-    pub songs: Vec<Song>,
-    #[serde(skip)]
-    pub current_index: usize,
-}
-
-impl Playlist {
-    pub fn new(name: String) -> Self {
-        Self {
-            name,
-            songs: Vec::new(),
-            current_index: 0,
-        }
-    }
-
-    pub fn add_song(&mut self, song: Song) {
-        self.songs.push(song);
-    }
-
-    pub fn remove_song(&mut self, index: usize) -> Option<Song> {
-        if index < self.songs.len() {
-            Some(self.songs.remove(index))
-        } else {
-            None
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.songs.clear();
-        self.current_index = 0;
-    }
-
-    pub fn current_song(&self) -> Option<&Song> {
-        self.songs.get(self.current_index)
-    }
-
-    pub fn next_index(&self) -> Option<usize> {
-        if self.current_index + 1 < self.songs.len() {
-            Some(self.current_index + 1)
-        } else {
-            None
-        }
-    }
-
-    pub fn prev_index(&self) -> Option<usize> {
-        if self.current_index > 0 {
-            Some(self.current_index - 1)
-        } else {
-            None
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.songs.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.songs.is_empty()
-    }
-
-    /// Guarda la playlist en disco
-    pub fn save(&self) -> Result<(), PlayerError> {
-        let playlists_dir = Self::playlists_dir()?;
-        fs::create_dir_all(&playlists_dir)?;
-
-        let filename = format!("{}.json", sanitize_filename(&self.name));
-        let filepath = playlists_dir.join(filename);
-
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| PlayerError::PlaylistError(format!("Serialization error: {}", e)))?;
-
-        fs::write(filepath, json)?;
-        Ok(())
-    }
-
-    /// Carga una playlist desde disco
-    pub fn load(name: &str) -> Result<Self, PlayerError> {
-        let playlists_dir = Self::playlists_dir()?;
-        let filename = format!("{}.json", sanitize_filename(name));
-        let filepath = playlists_dir.join(filename);
-
-        let json = fs::read_to_string(filepath)?;
-        let playlist: Playlist = serde_json::from_str(&json)
-            .map_err(|e| PlayerError::PlaylistError(format!("Deserialization error: {}", e)))?;
-
-        Ok(playlist)
-    }
-
-    /// Lista todas las playlists guardadas
-    pub fn list_saved() -> Result<Vec<String>, PlayerError> {
-        let playlists_dir = Self::playlists_dir()?;
-
-        if !playlists_dir.exists() {
-            return Ok(Vec::new());
-        }
-
-        let mut playlists = Vec::new();
-        for entry in fs::read_dir(playlists_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    playlists.push(stem.to_string());
-                }
-            }
-        }
-
-        Ok(playlists)
-    }
-
-    /// Elimina una playlist del disco
-    pub fn delete(name: &str) -> Result<(), PlayerError> {
-        let playlists_dir = Self::playlists_dir()?;
-        let filename = format!("{}.json", sanitize_filename(name));
-        let filepath = playlists_dir.join(filename);
-
-        if filepath.exists() {
-            fs::remove_file(filepath)?;
-        }
-
-        Ok(())
-    }
-
-    /// Obtiene el directorio de playlists
-    fn playlists_dir() -> Result<PathBuf, PlayerError> {
-        let mut config_dir = dirs::config_dir()
-            .ok_or_else(|| PlayerError::PlaylistError("No config directory".to_string()))?;
-        config_dir.push("notnative");
-        config_dir.push("playlists");
-        Ok(config_dir)
-    }
-}
-
-/// Sanitiza un nombre de archivo
-fn sanitize_filename(name: &str) -> String {
-    name.chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-            _ => c,
-        })
-        .collect()
 }
 
 /// Errores del reproductor
@@ -192,24 +43,18 @@ fn sanitize_filename(name: &str) -> String {
 pub enum PlayerError {
     #[error("MPV error: {0}")]
     Mpv(#[from] libmpv2::Error),
-
+    
     #[error("Failed to initialize player")]
     InitializationError,
-
+    
     #[error("YouTube fetch error: {0}")]
     YoutubeFetch(String),
-
+    
     #[error("No song loaded")]
     NoSong,
-
+    
     #[error("RustyPipe error: {0}")]
     RustyPipe(String),
-
-    #[error("Playlist error: {0}")]
-    PlaylistError(String),
-
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
 }
 
 /// Cliente de YouTube para buscar y obtener URLs de audio
@@ -223,42 +68,39 @@ impl YouTubeClient {
         let mut cache_dir = dirs::cache_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
         cache_dir.push("notnative");
         cache_dir.push("rustypipe");
-
+        
         let rp = RustyPipe::builder()
             .storage_dir(cache_dir)
             .build()
             .expect("Failed to create RustyPipe client");
-
+        
         Self { client: rp }
     }
-
+    
     /// Busca música en YouTube
     pub async fn search(&self, query: &str) -> Result<Vec<Song>, PlayerError> {
         println!("Buscando música en YouTube: {}", query);
-
+        
         // Buscar en YouTube (filtro de música se aplicará en los resultados)
-        let results = self
-            .client
+        let results = self.client
             .query()
             .search(query)
             .await
             .map_err(|e| PlayerError::RustyPipe(format!("Search error: {:?}", e)))?;
-
+        
         let mut songs = Vec::new();
-
+        
         // Convertir resultados a nuestro formato Song (filtrar solo videos con música)
         for item in results.items.items.iter().take(10) {
             use rustypipe::model::YouTubeItem;
-
+            
             if let YouTubeItem::Video(video) = item {
                 // Extraer nombre del canal como artista
-                let channel_name = video
-                    .channel
-                    .as_ref()
+                let channel_name = video.channel.as_ref()
                     .map(|c| c.name.clone())
                     .unwrap_or_else(|| "Unknown".to_string());
                 let artists = vec![channel_name];
-
+                
                 songs.push(Song {
                     title: video.name.clone(),
                     video_id: video.id.clone(),
@@ -267,35 +109,32 @@ impl YouTubeClient {
                 });
             }
         }
-
+        
         println!("Encontradas {} canciones", songs.len());
         Ok(songs)
     }
-
+    
     /// Obtiene la URL del audio de un video
     pub async fn fetch_audio_url(&self, video_id: &str) -> Result<String, PlayerError> {
         println!("Obteniendo URL de audio para: {}", video_id);
-
+        
         // Obtener información del player
-        let player = self
-            .client
+        let player = self.client
             .query()
             .player(video_id)
             .await
             .map_err(|e| PlayerError::RustyPipe(format!("Player error: {:?}", e)))?;
-
+        
         // Buscar el stream de audio de mejor calidad
         let audio_stream = player
             .audio_streams
             .iter()
             .max_by_key(|s| s.bitrate)
             .ok_or_else(|| PlayerError::YoutubeFetch("No audio stream found".to_string()))?;
-
-        println!(
-            "Stream de audio encontrado: bitrate={}, codec={:?}",
-            audio_stream.bitrate, audio_stream.mime
-        );
-
+        
+        println!("Stream de audio encontrado: bitrate={}, codec={:?}", 
+                 audio_stream.bitrate, audio_stream.mime);
+        
         Ok(audio_stream.url.clone())
     }
 }
@@ -308,17 +147,6 @@ pub struct MusicPlayer {
     current_time: Arc<Mutex<f64>>,
     volume: Arc<Mutex<u8>>,
     youtube_client: YouTubeClient,
-    current_playlist: Arc<Mutex<Option<Playlist>>>,
-    repeat_mode: Arc<Mutex<RepeatMode>>,
-    shuffle: Arc<Mutex<bool>>,
-}
-
-/// Modo de repetición
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RepeatMode {
-    Off, // No repetir
-    One, // Repetir la canción actual
-    All, // Repetir toda la playlist
 }
 
 impl std::fmt::Debug for MusicPlayer {
@@ -332,97 +160,89 @@ impl std::fmt::Debug for MusicPlayer {
 
 impl MusicPlayer {
     /// Crea un nuevo reproductor de música
-    ///
+    /// 
     /// # Argumentos
     /// * `audio_sink` - Opcional: nombre del sink de audio de PulseAudio (ej: "alsa_output.pci-0000_00_1f.3.analog-stereo")
     pub fn new(audio_sink: Option<&str>) -> Result<Self, PlayerError> {
         // Configurar locale para MPV (requiere LC_NUMERIC=C)
         unsafe {
-            libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
+            libc::setlocale(libc::LC_NUMERIC, b"C\0".as_ptr() as *const i8);
         }
-
+        
         println!("🎵 Inicializando MPV...");
         let mpv = Mpv::new().map_err(|e| {
             eprintln!("❌ Error creando instancia MPV: {:?}", e);
             e
         })?;
-
+        
         // Configurar MPV para reproducción de audio (con manejo de errores individual)
         if let Err(e) = mpv.set_property("video", "no") {
             eprintln!("⚠️  Error configurando 'video': {:?}", e);
         }
-
-        // IMPORTANTE: Habilitar ytdl para soporte de YouTube
-        if let Err(e) = mpv.set_property("ytdl", "yes") {
+        
+        if let Err(e) = mpv.set_property("ytdl", "no") {
             eprintln!("⚠️  Error configurando 'ytdl': {:?}", e);
-            eprintln!("    ADVERTENCIA: Sin ytdl, MPV no podrá reproducir URLs de YouTube");
-            eprintln!("    Instala yt-dlp: sudo apt install yt-dlp");
-        } else {
-            println!("✓ ytdl habilitado para soporte de YouTube");
         }
-
+        
         if let Err(e) = mpv.set_property("audio-channels", "stereo") {
             eprintln!("⚠️  Error configurando 'audio-channels': {:?}", e);
         }
-
+        
         if let Err(e) = mpv.set_property("volume", 80) {
             eprintln!("⚠️  Error configurando 'volume': {:?}", e);
         }
-
+        
         // Asegurarse de que el audio no está silenciado
         if let Err(e) = mpv.set_property("mute", false) {
             eprintln!("⚠️  Error configurando 'mute': {:?}", e);
         }
-
+        
         // Configurar salida de audio (PulseAudio)
         // Importante: MPV necesita usar "pulse" como backend primero
         if let Err(e) = mpv.set_property("ao", "pulse") {
             eprintln!("⚠️  Error configurando 'ao': {:?}", e);
         }
-
+        
         // Configuraciones adicionales de PulseAudio
         // pulse-allow-suspended: permite usar PulseAudio incluso si el sink está suspendido
         if let Err(e) = mpv.set_property("pulse-allow-suspended", true) {
             eprintln!("⚠️  Error configurando 'pulse-allow-suspended': {:?}", e);
         }
-
+        
         // pulse-latency-hacks: habilita hacks de latencia para PulseAudio
         if let Err(e) = mpv.set_property("pulse-latency-hacks", true) {
             eprintln!("⚠️  Error configurando 'pulse-latency-hacks': {:?}", e);
         }
-
+        
         // audio-buffer: tamaño del buffer de audio (en segundos)
         // Un valor más alto puede ayudar con problemas de sincronización
         if let Err(e) = mpv.set_property("audio-buffer", 0.5) {
             eprintln!("⚠️  Error configurando 'audio-buffer': {:?}", e);
         }
-
+        
         // audio-client-name: nombre del cliente de audio para PulseAudio
         if let Err(e) = mpv.set_property("audio-client-name", "NotNative Music") {
             eprintln!("⚠️  Error configurando 'audio-client-name': {:?}", e);
         }
-
+        
         // gapless-audio: desactivar para evitar problemas con inicio de audio
         if let Err(e) = mpv.set_property("gapless-audio", "no") {
             eprintln!("⚠️  Error configurando 'gapless-audio': {:?}", e);
         }
-
+        
         // initial-audio-sync: asegurar que el audio se sincroniza correctamente al inicio
         if let Err(e) = mpv.set_property("initial-audio-sync", true) {
             eprintln!("⚠️  Error configurando 'initial-audio-sync': {:?}", e);
         }
-
+        
         // Configurar dispositivo de audio (usar el sink configurado o auto)
         if let Some(sink) = audio_sink {
             // MPV usa formato "pulse/sink_name" para PulseAudio
             let mpv_audio_device = format!("pulse/{}", sink);
             println!("🔊 Configurando salida de audio: {}", mpv_audio_device);
-
+            
             if let Err(e) = mpv.set_property("audio-device", mpv_audio_device.as_str()) {
-                eprintln!(
-                    "⚠️  Error configurando audio-device '{}': {:?}",
-                    mpv_audio_device, e
-                );
+                eprintln!("⚠️  Error configurando audio-device '{}': {:?}", mpv_audio_device, e);
                 eprintln!("    Intentando con 'pulse' (default)...");
                 let _ = mpv.set_property("audio-device", "pulse");
             } else {
@@ -434,18 +254,16 @@ impl MusicPlayer {
                 eprintln!("⚠️  Error configurando 'audio-device': {:?}", e);
             }
         }
-
+        
         // Optimizaciones de caché y red (opcional, no falla si no funciona)
         let _ = mpv.set_property("cache", "yes");
         let _ = mpv.set_property("demuxer-max-bytes", 128 * 1024 * 1024);
         let _ = mpv.set_property("demuxer-readahead-secs", 20.0);
-        let _ = mpv.set_property(
-            "http-header-fields",
-            "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-        );
-
+        let _ = mpv.set_property("http-header-fields", 
+            "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36");
+        
         println!("✓ MPV inicializado correctamente");
-
+        
         Ok(Self {
             mpv: Arc::new(mpv),
             state: Arc::new(Mutex::new(PlayerState::Idle)),
@@ -453,22 +271,19 @@ impl MusicPlayer {
             current_time: Arc::new(Mutex::new(0.0)),
             volume: Arc::new(Mutex::new(80)),
             youtube_client: YouTubeClient::new(),
-            current_playlist: Arc::new(Mutex::new(None)),
-            repeat_mode: Arc::new(Mutex::new(RepeatMode::Off)),
-            shuffle: Arc::new(Mutex::new(false)),
         })
     }
-
+    
     /// Obtiene el estado actual del reproductor
     pub fn state(&self) -> PlayerState {
         *self.state.lock().unwrap()
     }
-
+    
     /// Obtiene la canción actual
     pub fn current_song(&self) -> Option<Song> {
         self.current_song.lock().unwrap().clone()
     }
-
+    
     /// Obtiene el tiempo actual de reproducción
     pub fn current_time(&self) -> f64 {
         // Intentar obtener el tiempo desde MPV
@@ -479,31 +294,31 @@ impl MusicPlayer {
             *self.current_time.lock().unwrap()
         }
     }
-
+    
     /// Obtiene el volumen actual (0-100)
     pub fn volume(&self) -> u8 {
         *self.volume.lock().unwrap()
     }
-
+    
     /// Busca música en YouTube
     pub async fn search(&self, query: &str) -> Result<Vec<Song>, PlayerError> {
         self.youtube_client.search(query).await
     }
-
+    
     /// Reproduce una canción
     pub async fn play(&self, song: Song) -> Result<(), PlayerError> {
         *self.state.lock().unwrap() = PlayerState::Loading;
         *self.current_song.lock().unwrap() = Some(song.clone());
-
+        
         println!("⏳ Cargando: {} - {}", song.title, song.artist_names());
-
+        
         // IMPORTANTE: Despertar el sink de audio si está suspendido
         // Esto es necesario porque MPV no siempre activa sinks suspendidos
         if let Ok(device) = self.mpv.get_property::<String>("audio-device") {
             if device.starts_with("pulse/") {
                 let sink_name = device.strip_prefix("pulse/").unwrap_or("");
                 println!("🔊 Activando sink de audio: {}", sink_name);
-
+                
                 // Reproducir silencio brevemente para activar el sink
                 let _ = std::process::Command::new("paplay")
                     .arg("/dev/zero")
@@ -521,72 +336,56 @@ impl MusicPlayer {
                         std::thread::sleep(std::time::Duration::from_millis(50));
                         child.kill()
                     });
-
+                
                 println!("✓ Sink activado");
             }
         }
-
+        
+        // Obtener URL de audio
+        let audio_url = self.youtube_client.fetch_audio_url(&song.video_id).await?;
+        
         println!("🎵 Reproduciendo: {} - {}", song.title, song.artist_names());
-
-        // CRÍTICO: Usar el video ID directamente - MPV con ytdl manejará la descarga
-        // Esto es más confiable que obtener el URL manualmente
-        let ytdl_url = format!("https://www.youtube.com/watch?v={}", song.video_id);
-        println!("📺 URL de YouTube: {}", ytdl_url);
-
+        
         // CRÍTICO: Asegurarse de que no está pausado ANTES de cargar
         let _ = self.mpv.set_property("pause", false);
-
+        
         // Forzar volumen alto para asegurar que se escucha
         let _ = self.mpv.set_property("volume", 100);
-
-        // Cargar archivo usando ytdl - MPV manejará YouTube internamente
-        self.mpv.command("loadfile", &[&ytdl_url, "replace"])?;
-
-        // CRITICO: Esperar a que MPV realmente cargue el stream
-        println!("Esperando a que MPV cargue el stream...");
-        let mut loaded = false;
-        for wait_attempt in 1..=20 {
-            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-
-            // Verificar si MPV ya no esta idle
-            if let Ok(idle) = self.mpv.get_property::<bool>("idle-active") {
-                if !idle {
-                    println!("Stream cargado en MPV (intento {})", wait_attempt);
-                    loaded = true;
-                    break;
-                }
-            }
-
-            // Verificar tracks
-            if let Ok(track_count) = self.mpv.get_property::<i64>("track-list/count") {
-                if track_count > 0 {
-                    println!(
-                        "Tracks detectados: {} (intento {})",
-                        track_count, wait_attempt
-                    );
-                    loaded = true;
-                    break;
-                }
-            }
-
-            if wait_attempt % 5 == 0 {
-                println!("Cargando... ({}/20)", wait_attempt);
-            }
-        }
-
-        if !loaded {
-            println!("ADVERTENCIA: MPV no cargo el stream en 4 segundos");
-        }
-
-        // Forzar reproduccion
-        for _attempt in 1..=3 {
+        
+        // Cargar archivo - MPV debería iniciar automáticamente si pause=false
+        self.mpv.command("loadfile", &[&audio_url, "replace"])?;
+        
+        // Dar tiempo a MPV para inicializar el audio
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+        
+        // Múltiples intentos de forzar reproducción
+        for attempt in 1..=3 {
             let _ = self.mpv.set_property("pause", false);
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            
+            if let Ok(paused) = self.mpv.get_property::<bool>("pause") {
+                println!("� Intento {}: pause={}", attempt, paused);
+                if !paused {
+                    break;
+                }
+            }
         }
+        
+        // Verificar si está realmente reproduciendo
+        if let Ok(paused) = self.mpv.get_property::<bool>("pause") {
+            println!("🔍 Estado final de pausa en MPV: {}", paused);
+            if paused {
+                println!("⚠️  MPV sigue pausado después de múltiples intentos");
+                // Último intento - usar comando directo
+                let _ = self.mpv.command("set", &["pause", "no"]);
+            }
+        }
+        
+        // Verificar configuración de audio
         if let Ok(vol) = self.mpv.get_property::<i64>("volume") {
             println!("🔊 Volumen actual de MPV: {}%", vol);
         }
-
+        
         if let Ok(muted) = self.mpv.get_property::<bool>("mute") {
             println!("🔇 MPV silenciado: {}", muted);
             if muted {
@@ -594,46 +393,43 @@ impl MusicPlayer {
                 let _ = self.mpv.set_property("mute", false);
             }
         }
-
+        
         if let Ok(device) = self.mpv.get_property::<String>("audio-device") {
             println!("🔊 Dispositivo de audio activo: {}", device);
         }
-
+        
         // Diagnósticos adicionales
         if let Ok(ao) = self.mpv.get_property::<String>("current-ao") {
             println!("🔊 Audio output driver actual: {}", ao);
         }
-
+        
         if let Ok(idle) = self.mpv.get_property::<bool>("idle-active") {
             println!("💤 MPV idle: {}", idle);
         }
-
+        
         if let Ok(core_idle) = self.mpv.get_property::<bool>("core-idle") {
             println!("💤 MPV core-idle: {}", core_idle);
         }
-
+        
         if let Ok(demuxer_cache_state) = self.mpv.get_property::<String>("demuxer-cache-state") {
             println!("📦 Cache state: {}", demuxer_cache_state);
         }
-
+        
         // Verificar si hay audio tracks
         if let Ok(track_list) = self.mpv.get_property::<String>("track-list") {
             println!("🎵 Track list: {}", track_list);
         }
-
+        
         // Verificar si el archivo realmente se cargó
         if let Ok(path) = self.mpv.get_property::<String>("path") {
-            println!(
-                "📁 Path cargado: {}",
-                &path[..std::cmp::min(path.len(), 100)]
-            );
+            println!("📁 Path cargado: {}", &path[..std::cmp::min(path.len(), 100)]);
         }
-
+        
         *self.state.lock().unwrap() = PlayerState::Playing;
-
+        
         Ok(())
     }
-
+    
     /// Pausa la reproducción
     pub fn pause(&self) -> Result<(), PlayerError> {
         if self.state() == PlayerState::Playing {
@@ -645,7 +441,7 @@ impl MusicPlayer {
             Err(PlayerError::NoSong)
         }
     }
-
+    
     /// Reanuda la reproducción
     pub fn resume(&self) -> Result<(), PlayerError> {
         if self.state() == PlayerState::Paused {
@@ -657,7 +453,7 @@ impl MusicPlayer {
             Err(PlayerError::NoSong)
         }
     }
-
+    
     /// Alterna entre reproducir y pausar
     pub fn toggle_play_pause(&self) -> Result<(), PlayerError> {
         match self.state() {
@@ -666,7 +462,7 @@ impl MusicPlayer {
             _ => Err(PlayerError::NoSong),
         }
     }
-
+    
     /// Detiene la reproducción
     pub fn stop(&self) -> Result<(), PlayerError> {
         self.mpv.command("stop", &[])?;
@@ -676,31 +472,29 @@ impl MusicPlayer {
         println!("⏹️ Reproducción detenida");
         Ok(())
     }
-
+    
     /// Salta adelante en la reproducción (segundos)
     pub fn seek_forward(&self, seconds: f64) -> Result<(), PlayerError> {
         if self.state() == PlayerState::Playing || self.state() == PlayerState::Paused {
-            self.mpv
-                .command("seek", &[&seconds.to_string(), "relative"])?;
+            self.mpv.command("seek", &[&seconds.to_string(), "relative"])?;
             println!("⏩ Avanzando {} segundos", seconds);
             Ok(())
         } else {
             Err(PlayerError::NoSong)
         }
     }
-
+    
     /// Salta atrás en la reproducción (segundos)
     pub fn seek_backward(&self, seconds: f64) -> Result<(), PlayerError> {
         if self.state() == PlayerState::Playing || self.state() == PlayerState::Paused {
-            self.mpv
-                .command("seek", &[&format!("-{}", seconds), "relative"])?;
+            self.mpv.command("seek", &[&format!("-{}", seconds), "relative"])?;
             println!("⏪ Retrocediendo {} segundos", seconds);
             Ok(())
         } else {
             Err(PlayerError::NoSong)
         }
     }
-
+    
     /// Establece el volumen (0-100)
     pub fn set_volume(&self, vol: u8) -> Result<(), PlayerError> {
         let vol = vol.min(100);
@@ -709,211 +503,17 @@ impl MusicPlayer {
         println!("🔊 Volumen: {}%", vol);
         Ok(())
     }
-
+    
     /// Aumenta el volumen
     pub fn volume_up(&self) -> Result<(), PlayerError> {
         let current = self.volume();
         self.set_volume(current.saturating_add(10))
     }
-
+    
     /// Disminuye el volumen
     pub fn volume_down(&self) -> Result<(), PlayerError> {
         let current = self.volume();
         self.set_volume(current.saturating_sub(10))
-    }
-
-    // ========== MÉTODOS DE PLAYLIST ==========
-
-    /// Carga una playlist
-    pub fn load_playlist(&self, playlist: Playlist) {
-        *self.current_playlist.lock().unwrap() = Some(playlist);
-    }
-
-    /// Obtiene la playlist actual
-    pub fn current_playlist(&self) -> Option<Playlist> {
-        self.current_playlist.lock().unwrap().clone()
-    }
-
-    /// Agrega una canción a la playlist actual
-    pub fn add_to_playlist(&self, song: Song) {
-        let mut playlist_lock = self.current_playlist.lock().unwrap();
-        if let Some(playlist) = playlist_lock.as_mut() {
-            playlist.add_song(song);
-        } else {
-            // Si no hay playlist, crear una nueva "Cola de reproducción"
-            let mut new_playlist = Playlist::new("Cola de reproducción".to_string());
-            new_playlist.add_song(song);
-            *playlist_lock = Some(new_playlist);
-        }
-    }
-
-    /// Elimina una canción de la playlist actual
-    pub fn remove_from_playlist(&self, index: usize) -> Option<Song> {
-        let mut playlist_lock = self.current_playlist.lock().unwrap();
-        if let Some(playlist) = playlist_lock.as_mut() {
-            playlist.remove_song(index)
-        } else {
-            None
-        }
-    }
-
-    /// Limpia la playlist actual
-    pub fn clear_playlist(&self) {
-        let mut playlist_lock = self.current_playlist.lock().unwrap();
-        if let Some(playlist) = playlist_lock.as_mut() {
-            playlist.clear();
-        }
-    }
-
-    /// Reproduce la siguiente canción de la playlist
-    pub async fn play_next(&self) -> Result<(), PlayerError> {
-        // Primero obtener la canción sin mantener el lock
-        let song = {
-            let mut playlist_lock = self.current_playlist.lock().unwrap();
-
-            if let Some(playlist) = playlist_lock.as_mut() {
-                // Verificar si hay siguiente canción
-                if let Some(next_idx) = playlist.next_index() {
-                    playlist.current_index = next_idx;
-                    Some(playlist.songs[next_idx].clone())
-                } else {
-                    // No hay más canciones
-                    let repeat_mode = *self.repeat_mode.lock().unwrap();
-                    if repeat_mode == RepeatMode::All && !playlist.songs.is_empty() {
-                        // Si está en modo repetir todo, volver al inicio
-                        playlist.current_index = 0;
-                        Some(playlist.songs[0].clone())
-                    } else {
-                        None
-                    }
-                }
-            } else {
-                return Err(PlayerError::PlaylistError(
-                    "No hay playlist cargada".to_string(),
-                ));
-            }
-        }; // Lock se libera aquí
-
-        // Ahora reproducir sin el lock
-        if let Some(s) = song {
-            self.play(s).await?;
-            Ok(())
-        } else {
-            Err(PlayerError::PlaylistError(
-                "No hay más canciones".to_string(),
-            ))
-        }
-    }
-
-    /// Reproduce la canción anterior de la playlist
-    pub async fn play_previous(&self) -> Result<(), PlayerError> {
-        // Primero obtener la canción sin mantener el lock
-        let song = {
-            let mut playlist_lock = self.current_playlist.lock().unwrap();
-
-            if let Some(playlist) = playlist_lock.as_mut() {
-                if let Some(prev_idx) = playlist.prev_index() {
-                    playlist.current_index = prev_idx;
-                    Some(playlist.songs[prev_idx].clone())
-                } else {
-                    None
-                }
-            } else {
-                return Err(PlayerError::PlaylistError(
-                    "No hay playlist cargada".to_string(),
-                ));
-            }
-        }; // Lock se libera aquí
-
-        // Ahora reproducir sin el lock
-        if let Some(s) = song {
-            self.play(s).await?;
-            Ok(())
-        } else {
-            Err(PlayerError::PlaylistError(
-                "No hay canción anterior".to_string(),
-            ))
-        }
-    }
-
-    /// Reproduce una canción específica de la playlist
-    pub async fn play_from_playlist(&self, index: usize) -> Result<(), PlayerError> {
-        // Primero obtener la canción sin mantener el lock
-        let song = {
-            let mut playlist_lock = self.current_playlist.lock().unwrap();
-
-            if let Some(playlist) = playlist_lock.as_mut() {
-                if index < playlist.songs.len() {
-                    playlist.current_index = index;
-                    Some(playlist.songs[index].clone())
-                } else {
-                    return Err(PlayerError::PlaylistError("Índice inválido".to_string()));
-                }
-            } else {
-                return Err(PlayerError::PlaylistError(
-                    "No hay playlist cargada".to_string(),
-                ));
-            }
-        }; // Lock se libera aquí
-
-        // Ahora reproducir sin el lock
-        if let Some(s) = song {
-            self.play(s).await?;
-            Ok(())
-        } else {
-            Err(PlayerError::PlaylistError("Índice inválido".to_string()))
-        }
-    }
-
-    /// Cambia el modo de repetición
-    pub fn set_repeat_mode(&self, mode: RepeatMode) {
-        *self.repeat_mode.lock().unwrap() = mode;
-    }
-
-    /// Obtiene el modo de repetición actual
-    pub fn repeat_mode(&self) -> RepeatMode {
-        *self.repeat_mode.lock().unwrap()
-    }
-
-    /// Alterna el modo shuffle
-    pub fn toggle_shuffle(&self) {
-        let mut shuffle = self.shuffle.lock().unwrap();
-        *shuffle = !*shuffle;
-    }
-
-    /// Verifica si shuffle está activado
-    pub fn is_shuffle(&self) -> bool {
-        *self.shuffle.lock().unwrap()
-    }
-
-    /// Guarda la playlist actual en disco
-    pub fn save_current_playlist(&self, name: Option<String>) -> Result<(), PlayerError> {
-        let mut playlist_lock = self.current_playlist.lock().unwrap();
-
-        if let Some(playlist) = playlist_lock.as_mut() {
-            if let Some(new_name) = name {
-                playlist.name = new_name;
-            }
-            playlist.save()?;
-            Ok(())
-        } else {
-            Err(PlayerError::PlaylistError(
-                "No hay playlist cargada".to_string(),
-            ))
-        }
-    }
-
-    /// Verifica si la canción actual ha terminado y debe reproducir la siguiente
-    pub fn check_should_play_next(&self) -> bool {
-        // Verificar si MPV está en estado "idle" (terminó de reproducir)
-        if let Ok(idle) = self.mpv.get_property::<bool>("idle-active") {
-            if idle {
-                let state = self.state();
-                // Si estaba reproduciendo y ahora está idle, la canción terminó
-                return state == PlayerState::Playing || state == PlayerState::Loading;
-            }
-        }
-        false
     }
 }
 

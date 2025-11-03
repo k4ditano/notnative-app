@@ -145,6 +145,10 @@ pub struct MainApp {
     music_results_list: gtk::ListBox,
     music_now_playing_label: gtk::Label,
     music_state_label: gtk::Label,
+    music_play_pause_btn: gtk::Button,
+    // Gestión de playlists
+    playlist_current_list: gtk::ListBox,
+    playlist_saved_list: gtk::ListBox,
 }
 
 #[derive(Debug)]
@@ -234,6 +238,21 @@ pub enum AppMsg {
     MusicVolumeUp,                        // Subir volumen
     MusicVolumeDown,                      // Bajar volumen
     MusicUpdateState,                     // Actualizar estado del reproductor
+    // Mensajes de playlist
+    MusicAddToPlaylist(crate::music_player::Song), // Agregar canción a playlist
+    MusicRemoveFromPlaylist(usize),                // Eliminar canción de playlist
+    MusicClearPlaylist,                            // Limpiar playlist
+    MusicNewPlaylist,                              // Crear nueva playlist vacía
+    MusicNextSong,                                 // Siguiente canción
+    MusicPreviousSong,                             // Canción anterior
+    MusicPlayFromPlaylist(usize),                  // Reproducir canción específica
+    MusicToggleRepeat,                             // Cambiar modo de repetición
+    MusicToggleShuffle,                            // Activar/desactivar shuffle
+    MusicSavePlaylist(String),                     // Guardar playlist con nombre
+    MusicLoadPlaylist(String),                     // Cargar playlist guardada
+    MusicDeletePlaylist(String),                   // Eliminar playlist guardada
+    MusicCheckNextSong,                            // Verificar si debe reproducir siguiente
+    TogglePlaylistView,                            // Mostrar/ocultar vista de playlist
 }
 
 #[component(pub)]
@@ -499,7 +518,7 @@ impl SimpleComponent for MainApp {
 
                                 // Reproductor de música
                                 append = music_player_button = &gtk::MenuButton {
-                                    set_icon_name: "media-playback-start-symbolic",
+                                    set_icon_name: "audio-x-generic-symbolic",
                                     set_tooltip_text: Some("Reproductor de música"),
                                     add_css_class: "flat",
                                     add_css_class: "circular",
@@ -702,7 +721,8 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
         completion_popover.set_child(Some(&scrolled));
 
         // Reproductor de música (se inicializará bajo demanda)
-        let music_player = Rc::new(RefCell::new(None));
+        let music_player: Rc<RefCell<Option<Rc<crate::music_player::MusicPlayer>>>> =
+            Rc::new(RefCell::new(None));
 
         // Crear popover del reproductor de música
         let music_search_entry = gtk::SearchEntry::new();
@@ -770,15 +790,62 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
         music_vol_up_btn.add_css_class("flat");
         music_vol_up_btn.add_css_class("circular");
 
-        let music_controls_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        music_controls_box.set_halign(gtk::Align::Center);
-        music_controls_box.append(&music_back_btn);
-        music_controls_box.append(&music_play_pause_btn);
-        music_controls_box.append(&music_forward_btn);
-        music_controls_box.append(&music_stop_btn);
-        music_controls_box.append(&gtk::Separator::new(gtk::Orientation::Vertical));
-        music_controls_box.append(&music_vol_down_btn);
-        music_controls_box.append(&music_vol_up_btn);
+        // Botones de playlist
+        let music_prev_btn = gtk::Button::new();
+        music_prev_btn.set_icon_name("media-skip-backward-symbolic");
+        music_prev_btn.set_tooltip_text(Some("Canción anterior"));
+        music_prev_btn.add_css_class("flat");
+        music_prev_btn.add_css_class("circular");
+
+        let music_next_btn = gtk::Button::new();
+        music_next_btn.set_icon_name("media-skip-forward-symbolic");
+        music_next_btn.set_tooltip_text(Some("Siguiente canción"));
+        music_next_btn.add_css_class("flat");
+        music_next_btn.add_css_class("circular");
+
+        let music_repeat_btn = gtk::Button::new();
+        music_repeat_btn.set_icon_name("media-playlist-repeat-symbolic");
+        music_repeat_btn.set_tooltip_text(Some("Repetir: OFF"));
+        music_repeat_btn.add_css_class("flat");
+        music_repeat_btn.add_css_class("circular");
+
+        let music_shuffle_btn = gtk::Button::new();
+        music_shuffle_btn.set_icon_name("media-playlist-shuffle-symbolic");
+        music_shuffle_btn.set_tooltip_text(Some("Aleatorio: OFF"));
+        music_shuffle_btn.add_css_class("flat");
+        music_shuffle_btn.add_css_class("circular");
+
+        // Caja de controles de reproducción básicos
+        let music_playback_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        music_playback_box.set_halign(gtk::Align::Center);
+        music_playback_box.append(&music_prev_btn);
+        music_playback_box.append(&music_back_btn);
+        music_playback_box.append(&music_play_pause_btn);
+        music_playback_box.append(&music_forward_btn);
+        music_playback_box.append(&music_next_btn);
+        music_playback_box.append(&music_stop_btn);
+
+        // Botón para abrir gestor de playlists (MenuButton)
+        let music_playlist_btn = gtk::MenuButton::new();
+        music_playlist_btn.set_icon_name("view-list-symbolic");
+        music_playlist_btn.set_tooltip_text(Some("Gestionar playlists"));
+        music_playlist_btn.add_css_class("flat");
+        music_playlist_btn.add_css_class("circular");
+
+        // Caja de controles de volumen y modos
+        let music_options_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        music_options_box.set_halign(gtk::Align::Center);
+        music_options_box.append(&music_vol_down_btn);
+        music_options_box.append(&music_vol_up_btn);
+        music_options_box.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+        music_options_box.append(&music_repeat_btn);
+        music_options_box.append(&music_shuffle_btn);
+        music_options_box.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+        music_options_box.append(&music_playlist_btn);
+
+        let music_controls_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        music_controls_box.append(&music_playback_box);
+        music_controls_box.append(&music_options_box);
 
         let music_status_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         music_status_box.set_margin_bottom(8);
@@ -810,6 +877,88 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
         widgets
             .music_player_button
             .set_popover(Some(&music_player_popover));
+
+        // ========== POPOVER DE GESTIÓN DE PLAYLISTS ==========
+
+        // Lista de canciones en la cola actual
+        let playlist_current_list = gtk::ListBox::new();
+        playlist_current_list.set_selection_mode(gtk::SelectionMode::None);
+        playlist_current_list.add_css_class("playlist-songs");
+
+        let playlist_current_scroll = gtk::ScrolledWindow::new();
+        playlist_current_scroll.set_child(Some(&playlist_current_list));
+        playlist_current_scroll.set_min_content_height(150);
+        playlist_current_scroll.set_max_content_height(250);
+        playlist_current_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+
+        // Botones para gestionar la cola actual
+        let playlist_new_btn = gtk::Button::builder().label("� Nueva").build();
+        playlist_new_btn.add_css_class("flat");
+
+        let playlist_save_btn = gtk::Button::builder().label("💾 Guardar").build();
+        playlist_save_btn.add_css_class("flat");
+
+        let playlist_clear_btn = gtk::Button::builder().label("🗑️ Limpiar").build();
+        playlist_clear_btn.add_css_class("flat");
+
+        let playlist_current_buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        playlist_current_buttons.set_halign(gtk::Align::Center);
+        playlist_current_buttons.append(&playlist_new_btn);
+        playlist_current_buttons.append(&playlist_save_btn);
+        playlist_current_buttons.append(&playlist_clear_btn);
+
+        // Lista de playlists guardadas
+        let playlist_saved_list = gtk::ListBox::new();
+        playlist_saved_list.set_selection_mode(gtk::SelectionMode::None);
+        playlist_saved_list.add_css_class("playlist-saved");
+
+        let playlist_saved_scroll = gtk::ScrolledWindow::new();
+        playlist_saved_scroll.set_child(Some(&playlist_saved_list));
+        playlist_saved_scroll.set_min_content_height(100);
+        playlist_saved_scroll.set_max_content_height(200);
+        playlist_saved_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+
+        // Contenido del popover de playlists
+        let playlist_manager_content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        playlist_manager_content.set_margin_all(12);
+        playlist_manager_content.set_width_request(350);
+
+        playlist_manager_content.append(
+            &gtk::Label::builder()
+                .label("<b>Cola de reproducción</b>")
+                .use_markup(true)
+                .xalign(0.0)
+                .build(),
+        );
+        playlist_manager_content.append(&playlist_current_scroll);
+        playlist_manager_content.append(&playlist_current_buttons);
+        playlist_manager_content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        playlist_manager_content.append(
+            &gtk::Label::builder()
+                .label("<b>Playlists guardadas</b>")
+                .use_markup(true)
+                .xalign(0.0)
+                .build(),
+        );
+        playlist_manager_content.append(&playlist_saved_scroll);
+
+        let playlist_manager_popover = gtk::Popover::new();
+        playlist_manager_popover.set_child(Some(&playlist_manager_content));
+        playlist_manager_popover.add_css_class("tags-popover");
+        playlist_manager_popover.set_autohide(true);
+        playlist_manager_popover.set_has_arrow(false);
+
+        music_playlist_btn.set_popover(Some(&playlist_manager_popover));
+
+        // Conectar evento cuando se muestra el popover de playlists
+        playlist_manager_popover.connect_show(gtk::glib::clone!(
+            #[strong]
+            sender,
+            move |_| {
+                // Actualizar listas cuando se abre el popover
+                sender.input(AppMsg::TogglePlaylistView);
+            }
+        ));
 
         // Conectar eventos del reproductor
         music_play_pause_btn.connect_clicked(gtk::glib::clone!(
@@ -857,6 +1006,168 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
             sender,
             move |_| {
                 sender.input(AppMsg::MusicVolumeUp);
+            }
+        ));
+
+        // Conectar botones de playlist
+        music_prev_btn.connect_clicked(gtk::glib::clone!(
+            #[strong]
+            sender,
+            move |_| {
+                sender.input(AppMsg::MusicPreviousSong);
+            }
+        ));
+
+        music_next_btn.connect_clicked(gtk::glib::clone!(
+            #[strong]
+            sender,
+            move |_| {
+                sender.input(AppMsg::MusicNextSong);
+            }
+        ));
+
+        music_repeat_btn.connect_clicked(gtk::glib::clone!(
+            #[strong]
+            sender,
+            move |_| {
+                sender.input(AppMsg::MusicToggleRepeat);
+            }
+        ));
+
+        music_shuffle_btn.connect_clicked(gtk::glib::clone!(
+            #[strong]
+            sender,
+            move |_| {
+                sender.input(AppMsg::MusicToggleShuffle);
+            }
+        ));
+
+        // Actualizar listas cuando se abre el popover
+        playlist_manager_popover.connect_show(gtk::glib::clone!(
+            #[strong]
+            sender,
+            move |_| {
+                sender.input(AppMsg::TogglePlaylistView);
+            }
+        ));
+
+        // Cerrar popover principal cuando se cierra el de playlists para evitar que se quede atascado
+        let music_player_popover_for_close = music_player_popover.clone();
+        playlist_manager_popover.connect_closed(gtk::glib::clone!(move |_| {
+            // Cerrar también el popover principal
+            music_player_popover_for_close.popdown();
+        }));
+
+        // Conectar botón de nueva playlist
+        playlist_new_btn.connect_clicked(gtk::glib::clone!(
+            #[strong]
+            sender,
+            move |_| {
+                sender.input(AppMsg::MusicNewPlaylist);
+            }
+        ));
+
+        // Conectar botón de guardar playlist
+        let music_player_clone = music_player.clone();
+        playlist_save_btn.connect_clicked(gtk::glib::clone!(
+            #[strong]
+            sender,
+            #[strong]
+            music_player_clone,
+            move |_| {
+                // Verificar si la playlist actual tiene nombre (y no es "Cola de reproducción")
+                let should_ask_name = if let Some(player) = music_player_clone.borrow().as_ref() {
+                    if let Some(playlist) = player.current_playlist() {
+                        playlist.name == "Cola de reproducción" || playlist.name.is_empty()
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                };
+
+                if should_ask_name {
+                    // Mostrar diálogo para pedir nombre
+                    let dialog = gtk::Window::builder()
+                        .title("Guardar Playlist")
+                        .modal(true)
+                        .default_width(300)
+                        .default_height(150)
+                        .build();
+
+                    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+                    content.set_margin_all(12);
+
+                    content.append(
+                        &gtk::Label::builder()
+                            .label("Nombre de la playlist:")
+                            .xalign(0.0)
+                            .build(),
+                    );
+
+                    let entry = gtk::Entry::new();
+                    entry.set_placeholder_text(Some("ej: Música relajante"));
+                    content.append(&entry);
+
+                    let buttons_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                    buttons_box.set_halign(gtk::Align::End);
+
+                    let cancel_btn = gtk::Button::builder().label("Cancelar").build();
+                    let save_btn = gtk::Button::builder().label("Guardar").build();
+                    save_btn.add_css_class("suggested-action");
+
+                    buttons_box.append(&cancel_btn);
+                    buttons_box.append(&save_btn);
+                    content.append(&buttons_box);
+
+                    dialog.set_child(Some(&content));
+
+                    cancel_btn.connect_clicked(gtk::glib::clone!(
+                        #[weak]
+                        dialog,
+                        move |_| {
+                            dialog.close();
+                        }
+                    ));
+
+                    save_btn.connect_clicked(gtk::glib::clone!(
+                        #[weak]
+                        dialog,
+                        #[weak]
+                        entry,
+                        #[strong]
+                        sender,
+                        move |_| {
+                            let name = entry.text().to_string();
+                            if !name.is_empty() {
+                                sender.input(AppMsg::MusicSavePlaylist(name));
+                                dialog.close();
+                            }
+                        }
+                    ));
+
+                    dialog.present();
+                } else {
+                    // Ya tiene nombre, guardar directamente
+                    if let Some(player) = music_player_clone.borrow().as_ref() {
+                        if let Some(playlist) = player.current_playlist() {
+                            println!(
+                                "💾 Guardando playlist '{}' automáticamente...",
+                                playlist.name
+                            );
+                            sender.input(AppMsg::MusicSavePlaylist(playlist.name.clone()));
+                        }
+                    }
+                }
+            }
+        ));
+
+        // Conectar botón de limpiar cola
+        playlist_clear_btn.connect_clicked(gtk::glib::clone!(
+            #[strong]
+            sender,
+            move |_| {
+                sender.input(AppMsg::MusicClearPlaylist);
             }
         ));
 
@@ -940,6 +1251,9 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
             music_results_list,
             music_now_playing_label,
             music_state_label,
+            music_play_pause_btn,
+            playlist_current_list,
+            playlist_saved_list,
         };
 
         // Guardar el sender en el modelo
@@ -1935,6 +2249,13 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
         // Dar foco inicial al TextView para que detecte teclas inmediatamente
         widgets.text_view.grab_focus();
 
+        // Timer para verificar si debe reproducir la siguiente canción (cada 2 segundos)
+        let sender_clone = sender.clone();
+        gtk::glib::timeout_add_seconds_local(2, move || {
+            sender_clone.input(AppMsg::MusicCheckNextSong);
+            gtk::glib::ControlFlow::Continue
+        });
+
         ComponentParts { model, widgets }
     }
 
@@ -2662,10 +2983,12 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
                                 // Mostrar cada resultado como un botón clickeable
                                 for song in results {
                                     let song_clone = song.clone();
+                                    let song_clone2 = song.clone();
                                     let sender_clone2 = sender_clone.clone();
+                                    let sender_clone3 = sender_clone.clone();
 
-                                    let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
-                                    row.set_margin_all(8);
+                                    let labels_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
+                                    labels_box.set_hexpand(true);
 
                                     let title_label = gtk::Label::new(Some(&song.title));
                                     title_label.set_xalign(0.0);
@@ -2684,17 +3007,37 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
                                     info_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
                                     info_label.add_css_class("dim-label");
 
-                                    row.append(&title_label);
-                                    row.append(&info_label);
+                                    labels_box.append(&title_label);
+                                    labels_box.append(&info_label);
 
-                                    let button = gtk::Button::new();
-                                    button.set_child(Some(&row));
-                                    button.add_css_class("flat");
-                                    button.connect_clicked(move |_| {
+                                    // Botón para agregar a playlist (independiente, no dentro del botón principal)
+                                    let add_to_playlist_btn = gtk::Button::new();
+                                    add_to_playlist_btn.set_icon_name("list-add-symbolic");
+                                    add_to_playlist_btn
+                                        .set_tooltip_text(Some("Agregar a playlist"));
+                                    add_to_playlist_btn.add_css_class("flat");
+                                    add_to_playlist_btn.add_css_class("circular");
+                                    add_to_playlist_btn.connect_clicked(move |_| {
+                                        sender_clone3
+                                            .input(AppMsg::MusicAddToPlaylist(song_clone2.clone()));
+                                    });
+
+                                    // Botón principal para reproducir (solo con las etiquetas)
+                                    let play_button = gtk::Button::new();
+                                    play_button.set_child(Some(&labels_box));
+                                    play_button.add_css_class("flat");
+                                    play_button.set_hexpand(true);
+                                    play_button.connect_clicked(move |_| {
                                         sender_clone2.input(AppMsg::MusicPlay(song_clone.clone()));
                                     });
 
-                                    results_list.append(&button);
+                                    // Fila con botón de reproducir y botón de agregar
+                                    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                                    row.set_margin_all(8);
+                                    row.append(&play_button);
+                                    row.append(&add_to_playlist_btn);
+
+                                    results_list.append(&row);
                                 }
                             }
                         }
@@ -2818,12 +3161,32 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
             AppMsg::MusicUpdateState => {
                 use crate::music_player::PlayerState;
 
-                let state = self
-                    .music_player
-                    .borrow()
-                    .as_ref()
-                    .map(|p| p.state())
-                    .unwrap_or(PlayerState::Idle);
+                let (state, current_song) = {
+                    let player_ref = self.music_player.borrow();
+                    if let Some(player) = player_ref.as_ref() {
+                        (player.state(), player.current_song())
+                    } else {
+                        (PlayerState::Idle, None)
+                    }
+                };
+
+                // Actualizar label con la canción actual
+                if let Some(song) = current_song {
+                    let full_title = if state == PlayerState::Loading {
+                        format!("⏳ {} - {}", song.title, song.artist_names())
+                    } else {
+                        format!("🎵 {} - {}", song.title, song.artist_names())
+                    };
+                    self.music_now_playing_label.set_text(&full_title);
+                    self.music_now_playing_label
+                        .set_tooltip_text(Some(&full_title));
+                } else if state == PlayerState::Idle {
+                    self.music_now_playing_label
+                        .set_text("No hay música reproduciéndose");
+                    self.music_now_playing_label
+                        .set_tooltip_text(Some("No hay música reproduciéndose"));
+                }
+
                 println!("🔄 Actualizando estado UI: {:?}", state);
                 match state {
                     PlayerState::Idle => {
@@ -2832,7 +3195,8 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
                         self.music_state_label
                             .remove_css_class("music-state-paused");
                         self.music_state_label.add_css_class("music-state-idle");
-                        self.music_player_button
+                        // Botón interno del reproductor
+                        self.music_play_pause_btn
                             .set_icon_name("media-playback-start-symbolic");
                     }
                     PlayerState::Playing => {
@@ -2840,8 +3204,8 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
                         self.music_state_label
                             .remove_css_class("music-state-paused");
                         self.music_state_label.add_css_class("music-state-playing");
-                        // Cuando está reproduciendo, mostrar icono de PAUSA
-                        self.music_player_button
+                        // Cuando está reproduciendo, mostrar icono de PAUSA en el botón interno
+                        self.music_play_pause_btn
                             .set_icon_name("media-playback-pause-symbolic");
                     }
                     PlayerState::Paused => {
@@ -2849,22 +3213,408 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
                         self.music_state_label
                             .remove_css_class("music-state-playing");
                         self.music_state_label.add_css_class("music-state-paused");
-                        // Cuando está pausado, mostrar icono de PLAY
-                        self.music_player_button
+                        // Cuando está pausado, mostrar icono de PLAY en el botón interno
+                        self.music_play_pause_btn
                             .set_icon_name("media-playback-start-symbolic");
                     }
                     PlayerState::Loading => {
                         self.music_state_label.remove_css_class("music-state-idle");
                         self.music_state_label.add_css_class("music-state-loading");
-                        self.music_player_button
+                        // Mostrar icono de carga en el botón interno
+                        self.music_play_pause_btn
                             .set_icon_name("content-loading-symbolic");
                     }
                     PlayerState::Error => {
                         self.music_state_label
                             .remove_css_class("music-state-playing");
                         self.music_state_label.add_css_class("music-state-error");
-                        self.music_player_button
+                        // Mostrar icono de error en el botón interno
+                        self.music_play_pause_btn
                             .set_icon_name("dialog-error-symbolic");
+                    }
+                }
+            }
+
+            AppMsg::MusicAddToPlaylist(song) => {
+                // Inicializar player bajo demanda si no existe
+                let player = {
+                    let mut player_opt = self.music_player.borrow_mut();
+                    if player_opt.is_none() {
+                        let audio_sink = self
+                            .notes_config
+                            .get_audio_output_sink()
+                            .map(|s| s.to_string());
+                        match crate::music_player::MusicPlayer::new(audio_sink.as_deref()) {
+                            Ok(p) => {
+                                *player_opt = Some(Rc::new(p));
+                            }
+                            Err(e) => {
+                                eprintln!("❌ Error al inicializar reproductor: {}", e);
+                                return;
+                            }
+                        }
+                    }
+                    player_opt.as_ref().unwrap().clone()
+                };
+
+                player.add_to_playlist(song.clone());
+                println!("✅ Canción agregada a la playlist: {}", song.title);
+            }
+
+            AppMsg::MusicRemoveFromPlaylist(index) => {
+                if let Some(player) = self.music_player.borrow().as_ref() {
+                    if let Some(removed) = player.remove_from_playlist(index) {
+                        println!("✅ Canción eliminada: {}", removed.title);
+                        // Refrescar vista
+                        sender.input(AppMsg::TogglePlaylistView);
+                    }
+                }
+            }
+
+            AppMsg::MusicClearPlaylist => {
+                if let Some(player) = self.music_player.borrow().as_ref() {
+                    player.clear_playlist();
+                    println!("✅ Playlist limpiada");
+                    // Refrescar vista
+                    sender.input(AppMsg::TogglePlaylistView);
+                }
+            }
+
+            AppMsg::MusicNewPlaylist => {
+                // Inicializar player si no existe
+                if self.music_player.borrow().is_none() {
+                    println!("🎵 Inicializando reproductor de música...");
+                    use crate::music_player::MusicPlayer;
+                    let player = MusicPlayer::new(None).expect("Failed to initialize music player");
+                    *self.music_player.borrow_mut() = Some(Rc::new(player));
+                }
+
+                if let Some(player) = self.music_player.borrow().as_ref() {
+                    // Crear nueva playlist vacía con nombre temporal
+                    use crate::music_player::Playlist;
+                    let new_playlist = Playlist::new("Cola de reproducción".to_string());
+                    player.load_playlist(new_playlist);
+                    println!("📝 Nueva playlist creada");
+                    // Refrescar vista
+                    sender.input(AppMsg::TogglePlaylistView);
+                }
+            }
+
+            AppMsg::MusicNextSong => {
+                let music_player_ref = self.music_player.clone();
+                let sender_clone = sender.clone();
+                gtk::glib::spawn_future_local(async move {
+                    let player_opt = music_player_ref.borrow().as_ref().map(Rc::clone);
+                    if let Some(player) = player_opt {
+                        match player.play_next().await {
+                            Ok(_) => {
+                                println!("✅ Reproduciendo siguiente canción");
+                                sender_clone.input(AppMsg::MusicUpdateState);
+                            }
+                            Err(e) => {
+                                eprintln!("❌ Error al reproducir siguiente: {}", e);
+                            }
+                        }
+                    }
+                });
+            }
+
+            AppMsg::MusicPreviousSong => {
+                let music_player_ref = self.music_player.clone();
+                let sender_clone = sender.clone();
+                gtk::glib::spawn_future_local(async move {
+                    let player_opt = music_player_ref.borrow().as_ref().map(Rc::clone);
+                    if let Some(player) = player_opt {
+                        match player.play_previous().await {
+                            Ok(_) => {
+                                println!("✅ Reproduciendo canción anterior");
+                                sender_clone.input(AppMsg::MusicUpdateState);
+                            }
+                            Err(e) => {
+                                eprintln!("❌ Error al reproducir anterior: {}", e);
+                            }
+                        }
+                    }
+                });
+            }
+
+            AppMsg::MusicPlayFromPlaylist(index) => {
+                // Cerrar popover principal al reproducir desde playlist
+                self.music_player_popover.popdown();
+
+                let music_player_ref = self.music_player.clone();
+                let sender_clone = sender.clone();
+                gtk::glib::spawn_future_local(async move {
+                    let player_opt = music_player_ref.borrow().as_ref().map(Rc::clone);
+                    if let Some(player) = player_opt {
+                        match player.play_from_playlist(index).await {
+                            Ok(_) => {
+                                println!("✅ Reproduciendo canción de playlist");
+                                sender_clone.input(AppMsg::MusicUpdateState);
+                            }
+                            Err(e) => {
+                                eprintln!("❌ Error al reproducir de playlist: {}", e);
+                            }
+                        }
+                    }
+                });
+            }
+
+            AppMsg::MusicToggleRepeat => {
+                use crate::music_player::RepeatMode;
+                if let Some(player) = self.music_player.borrow().as_ref() {
+                    let current = player.repeat_mode();
+                    let next = match current {
+                        RepeatMode::Off => RepeatMode::All,
+                        RepeatMode::All => RepeatMode::One,
+                        RepeatMode::One => RepeatMode::Off,
+                    };
+                    player.set_repeat_mode(next);
+                    println!("🔁 Modo repetición: {:?}", next);
+                }
+            }
+
+            AppMsg::MusicToggleShuffle => {
+                if let Some(player) = self.music_player.borrow().as_ref() {
+                    player.toggle_shuffle();
+                    let is_shuffle = player.is_shuffle();
+                    println!("🔀 Shuffle: {}", if is_shuffle { "ON" } else { "OFF" });
+                }
+            }
+
+            AppMsg::MusicSavePlaylist(name) => {
+                if let Some(player) = self.music_player.borrow().as_ref() {
+                    match player.save_current_playlist(Some(name.clone())) {
+                        Ok(_) => {
+                            println!("✅ Playlist '{}' guardada", name);
+                            // Refrescar vista de playlists guardadas
+                            sender.input(AppMsg::TogglePlaylistView);
+                        }
+                        Err(e) => eprintln!("❌ Error guardando playlist: {}", e),
+                    }
+                }
+            }
+
+            AppMsg::MusicLoadPlaylist(name) => {
+                use crate::music_player::Playlist;
+                match Playlist::load(&name) {
+                    Ok(playlist) => {
+                        let song_count = playlist.len();
+                        println!(
+                            "✅ Playlist '{}' cargada con {} canciones",
+                            name, song_count
+                        );
+
+                        // Inicializar player si no existe
+                        if self.music_player.borrow().is_none() {
+                            println!("🎵 Inicializando reproductor de música...");
+                            use crate::music_player::MusicPlayer;
+                            let player =
+                                MusicPlayer::new(None).expect("Failed to initialize music player");
+                            *self.music_player.borrow_mut() = Some(Rc::new(player));
+                        }
+
+                        if let Some(player) = self.music_player.borrow().as_ref() {
+                            player.load_playlist(playlist);
+
+                            // Debug: verificar que se cargó
+                            if let Some(loaded_pl) = player.current_playlist() {
+                                println!(
+                                    "🔍 Playlist cargada verificada: {} canciones",
+                                    loaded_pl.len()
+                                );
+                                for (i, song) in loaded_pl.songs.iter().enumerate() {
+                                    println!(
+                                        "  {}. {} - {}",
+                                        i + 1,
+                                        song.title,
+                                        song.artist_names()
+                                    );
+                                }
+                            }
+
+                            // Refrescar vista
+                            sender.input(AppMsg::TogglePlaylistView);
+                        }
+                    }
+                    Err(e) => eprintln!("❌ Error cargando playlist: {}", e),
+                }
+            }
+
+            AppMsg::MusicDeletePlaylist(name) => {
+                use crate::music_player::Playlist;
+                match Playlist::delete(&name) {
+                    Ok(_) => {
+                        println!("✅ Playlist '{}' eliminada", name);
+                        // Refrescar vista de playlists guardadas
+                        sender.input(AppMsg::TogglePlaylistView);
+                    }
+                    Err(e) => eprintln!("❌ Error eliminando playlist: {}", e),
+                }
+            }
+
+            AppMsg::MusicCheckNextSong => {
+                // Verificar si debe reproducir la siguiente canción
+                if let Some(player) = self.music_player.borrow().as_ref() {
+                    if player.check_should_play_next() {
+                        sender.input(AppMsg::MusicNextSong);
+                    }
+                }
+            }
+
+            AppMsg::TogglePlaylistView => {
+                println!("🔄 Actualizando vista de playlist...");
+
+                // Actualizar lista de canciones en la cola actual
+                while let Some(child) = self.playlist_current_list.first_child() {
+                    self.playlist_current_list.remove(&child);
+                }
+
+                if let Some(player) = self.music_player.borrow().as_ref() {
+                    if let Some(playlist) = player.current_playlist() {
+                        println!(
+                            "📋 Playlist encontrada con {} canciones",
+                            playlist.songs.len()
+                        );
+                        if playlist.songs.is_empty() {
+                            let empty_label = gtk::Label::new(Some("Cola vacía"));
+                            empty_label.add_css_class("dim-label");
+                            empty_label.set_margin_all(8);
+                            self.playlist_current_list.append(&empty_label);
+                        } else {
+                            for (idx, song) in playlist.songs.iter().enumerate() {
+                                let song_clone = song.clone();
+                                let sender_clone = sender.clone();
+
+                                let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                                row.set_margin_all(4);
+
+                                // Indicador de canción actual
+                                let indicator = if idx == playlist.current_index {
+                                    "▶ "
+                                } else {
+                                    &format!("{}. ", idx + 1)
+                                };
+
+                                let labels_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+                                labels_box.set_hexpand(true);
+
+                                let title_label =
+                                    gtk::Label::new(Some(&format!("{}{}", indicator, song.title)));
+                                title_label.set_xalign(0.0);
+                                title_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+
+                                let artist_label = gtk::Label::new(Some(&song.artist_names()));
+                                artist_label.set_xalign(0.0);
+                                artist_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                                artist_label.add_css_class("dim-label");
+
+                                labels_box.append(&title_label);
+                                labels_box.append(&artist_label);
+
+                                // Botón para reproducir esta canción
+                                let play_btn = gtk::Button::new();
+                                play_btn.set_icon_name("media-playback-start-symbolic");
+                                play_btn.set_tooltip_text(Some("Reproducir"));
+                                play_btn.add_css_class("flat");
+                                play_btn.add_css_class("circular");
+                                play_btn.connect_clicked(move |_| {
+                                    sender_clone.input(AppMsg::MusicPlayFromPlaylist(idx));
+                                });
+
+                                // Botón para eliminar de la cola
+                                let remove_btn = gtk::Button::new();
+                                remove_btn.set_icon_name("list-remove-symbolic");
+                                remove_btn.set_tooltip_text(Some("Eliminar"));
+                                remove_btn.add_css_class("flat");
+                                remove_btn.add_css_class("circular");
+
+                                let sender_clone2 = sender.clone();
+                                remove_btn.connect_clicked(move |_| {
+                                    sender_clone2.input(AppMsg::MusicRemoveFromPlaylist(idx));
+                                });
+
+                                row.append(&labels_box);
+                                row.append(&play_btn);
+                                row.append(&remove_btn);
+
+                                self.playlist_current_list.append(&row);
+                            }
+                        }
+                    } else {
+                        println!("⚠️  No hay playlist cargada en el player");
+                        let empty_label = gtk::Label::new(Some("No hay playlist cargada"));
+                        empty_label.add_css_class("dim-label");
+                        empty_label.set_margin_all(8);
+                        self.playlist_current_list.append(&empty_label);
+                    }
+                } else {
+                    println!("⚠️  No hay music player inicializado");
+                }
+
+                // Actualizar lista de playlists guardadas
+                while let Some(child) = self.playlist_saved_list.first_child() {
+                    self.playlist_saved_list.remove(&child);
+                }
+
+                use crate::music_player::Playlist;
+                match Playlist::list_saved() {
+                    Ok(playlists) => {
+                        if playlists.is_empty() {
+                            let empty_label = gtk::Label::new(Some("No hay playlists guardadas"));
+                            empty_label.add_css_class("dim-label");
+                            empty_label.set_margin_all(8);
+                            self.playlist_saved_list.append(&empty_label);
+                        } else {
+                            for playlist_name in playlists {
+                                let name_clone = playlist_name.clone();
+                                let name_clone2 = playlist_name.clone();
+                                let sender_clone = sender.clone();
+                                let sender_clone2 = sender.clone();
+
+                                let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                                row.set_margin_all(4);
+
+                                let label = gtk::Label::new(Some(&playlist_name));
+                                label.set_xalign(0.0);
+                                label.set_hexpand(true);
+
+                                // Botón para cargar playlist
+                                let load_btn = gtk::Button::new();
+                                load_btn.set_icon_name("media-playback-start-symbolic");
+                                load_btn.set_tooltip_text(Some("Cargar playlist"));
+                                load_btn.add_css_class("flat");
+                                load_btn.add_css_class("circular");
+                                load_btn.connect_clicked(move |_| {
+                                    sender_clone
+                                        .input(AppMsg::MusicLoadPlaylist(name_clone.clone()));
+                                });
+
+                                // Botón para eliminar playlist
+                                let delete_btn = gtk::Button::new();
+                                delete_btn.set_icon_name("user-trash-symbolic");
+                                delete_btn.set_tooltip_text(Some("Eliminar playlist"));
+                                delete_btn.add_css_class("flat");
+                                delete_btn.add_css_class("circular");
+                                delete_btn.connect_clicked(move |_| {
+                                    sender_clone2
+                                        .input(AppMsg::MusicDeletePlaylist(name_clone2.clone()));
+                                });
+
+                                row.append(&label);
+                                row.append(&load_btn);
+                                row.append(&delete_btn);
+
+                                self.playlist_saved_list.append(&row);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error listando playlists: {}", e);
+                        let error_label = gtk::Label::new(Some(&format!("Error: {}", e)));
+                        error_label.add_css_class("dim-label");
+                        error_label.set_margin_all(8);
+                        self.playlist_saved_list.append(&error_label);
                     }
                 }
             }
@@ -7924,7 +8674,10 @@ impl MainApp {
         menu_box.append(&about_button);
 
         // Crear el popover
-        let popover = gtk::Popover::builder().child(&menu_box).build();
+        let popover = gtk::Popover::builder()
+            .child(&menu_box)
+            .autohide(true)
+            .build();
         popover.add_css_class("menu");
 
         // Asignar el popover al MenuButton

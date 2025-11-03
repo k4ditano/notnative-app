@@ -46,6 +46,10 @@ Built with ❤️ for [Omarchy OS](https://omarchy.org) by [k4ditano](https://gi
 ![TODO Lists](screenshots/todo-checkboxes.png)
 *Interactive TODO lists with checkbox support - Markdown checkbox syntax with real-time rendering*
 
+### YouTube Music Player
+![Music Player](screenshots/music-player.png)
+*Built-in YouTube music player with playlist management, search, and persistent playlists*
+
 </div>
 
 ## ✨ Features
@@ -100,6 +104,18 @@ Built with ❤️ for [Omarchy OS](https://omarchy.org) by [k4ditano](https://gi
 - **Transcript viewer** - Read and search through video transcripts
 - **Local server** - Built-in HTTP server for video playback on `localhost:8787`
 
+#### YouTube Music Player
+- **Search YouTube music** - Search and play music directly from YouTube
+- **Audio-only playback** - Efficient audio streaming using MPV and yt-dlp
+- **Playlist management** - Create, save, and load multiple playlists
+- **Persistent playlists** - Playlists saved as JSON files in `~/.config/notnative/playlists/`
+- **Queue management** - Add, remove, and reorder songs in the current queue
+- **Playback controls** - Play, pause, next, previous, shuffle, and repeat modes
+- **Auto-update playlists** - When loading a saved playlist and adding songs, saving automatically updates without asking for name
+- **Background playback** - Music continues playing while you work on notes
+- **Smart popover UI** - Clean interface that auto-closes after interactions
+- **Now playing indicator** - Shows current song title and artist with loading states
+
 #### Database & Organization
 - **SQLite indexing** - Fast full-text search across all notes
 - **Tag system** - Organize notes with tags (YAML frontmatter support)
@@ -138,6 +154,8 @@ Built with ❤️ for [Omarchy OS](https://omarchy.org) by [k4ditano](https://gi
 - Rust 1.70+
 - GTK4
 - libadwaita (optional - NotNative uses pure GTK4)
+- MPV (for music player)
+- yt-dlp (for YouTube audio streaming)
 
 ### Arch Linux (Recommended for Omarchy OS)
 
@@ -164,7 +182,7 @@ makepkg -si
 1. **Install dependencies:**
 
 ```bash
-sudo pacman -S rust gtk4 base-devel
+sudo pacman -S rust gtk4 base-devel mpv yt-dlp
 ```
 
 2. **Clone the repository:**
