@@ -1,12 +1,12 @@
 # Maintainer: k4ditano <k4ditano@h2r.es>
 pkgname=notnative-app
-pkgver=0.1.1
+pkgver=0.1.3
 pkgrel=1
 pkgdesc="Note-taking application with Vim-like keybindings"
 arch=('x86_64')
 url="https://github.com/k4ditano/notnative-app"
 license=('MIT')
-depends=('gtk4' 'webkitgtk-6.0' 'libadwaita' 'gtksourceview5' 'libpulse' 'sqlite')
+depends=('gtk4' 'webkitgtk-6.0' 'libadwaita' 'gtksourceview5' 'libpulse' 'sqlite' 'mpv')
 makedepends=('cargo' 'rust' 'git' 'pkgconf')
 source=(
     "$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
