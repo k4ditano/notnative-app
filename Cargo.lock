@@ -2014,6 +2014,7 @@ dependencies = [
  "libmpv2",
  "notify",
  "open",
+ "pkg-config",
  "pulldown-cmark",
  "regex",
  "relm4",
