@@ -634,6 +634,22 @@ impl SimpleComponent for MainApp {
             mcp_registry.get_tools().len()
         );
 
+        // Iniciar servidor MCP en segundo plano
+        let notes_dir_for_server = notes_dir.clone();
+        let notes_db_for_server =
+            std::sync::Arc::new(std::sync::Mutex::new(notes_db.clone_connection()));
+
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("No se pudo crear runtime de Tokio");
+            rt.block_on(async {
+                if let Err(e) =
+                    crate::mcp::start_mcp_server(notes_dir_for_server, notes_db_for_server).await
+                {
+                    eprintln!("❌ Error iniciando servidor MCP: {}", e);
+                }
+            });
+        });
+
         // Cargar configuración
         let config_path = NotesConfig::default_path();
         let notes_config = NotesConfig::load(&config_path).unwrap_or_else(|_| {
