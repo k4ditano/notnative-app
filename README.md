@@ -116,6 +116,27 @@ Built with ❤️ for [Omarchy OS](https://omarchy.org) by [k4ditano](https://gi
 - **Smart popover UI** - Clean interface that auto-closes after interactions
 - **Now playing indicator** - Shows current song title and artist with loading states
 
+#### MCP Server (Model Context Protocol) 🆕
+- **REST API Server** - HTTP server on port 8788 exposing note operations
+- **8 Core Tools** - CreateNote, ListNotes, SearchNotes, ReadNote, UpdateNote, AppendToNote, DeleteNote, ListTags
+- **AI Integration** - Built-in AI chat with OpenAI/OpenRouter support
+- **External Automation** - Control NotNative from n8n, Python scripts, curl, etc.
+- **JSON-RPC 2.0** - Standard protocol for tool calling
+- **CORS Enabled** - Access from web applications and external tools
+- **Auto-refresh** - UI updates automatically when notes are modified via MCP
+- **Complete Documentation** - See `docs/MCP_INTEGRATION.md` for examples
+
+#### Background Mode & Control 🆕
+- **Single Instance** - Only one instance can run at a time (PID lock file)
+- **Hide to Background** - Closing window minimizes to background, app keeps running
+- **MCP Server 24/7** - Server remains active even when window is hidden
+- **File-based Control** - Control app via `/tmp/notnative.control` (show/hide/quit)
+- **Shell Script** - `notnative-control.sh` for easy control from terminal
+- **Waybar Integration** - Custom module with click actions
+- **Hyprland Shortcuts** - Bind global shortcuts to show/hide NotNative
+- **Auto-cleanup** - All temp files cleaned on exit
+- **See Documentation** - `docs/BACKGROUND_CONTROL.md` for complete guide
+
 #### Database & Organization
 - **SQLite indexing** - Fast full-text search across all notes
 - **Tag system** - Organize notes with tags (YAML frontmatter support)
@@ -156,6 +177,7 @@ Built with ❤️ for [Omarchy OS](https://omarchy.org) by [k4ditano](https://gi
 - libadwaita (optional - NotNative uses pure GTK4)
 - MPV (for music player)
 - yt-dlp (for YouTube audio streaming)
+- OpenAI API Key (optional - for AI chat features)
 
 ### Arch Linux (Recommended for Omarchy OS)
 
@@ -232,6 +254,152 @@ notnative-app
 # Or from source
 cargo run --release
 ```
+
+## 🔌 MCP Server & External Automation
+
+NotNative includes a **Model Context Protocol (MCP) server** that allows external tools to interact with your notes programmatically.
+
+### Quick Start
+
+The MCP server starts automatically when you launch NotNative and listens on `http://localhost:8788`.
+
+**Test the server:**
+```bash
+# Health check
+curl http://localhost:8788/health
+
+# List available tools
+curl -X POST http://localhost:8788/mcp/list_tools \
+  -H "Content-Type: application/json"
+
+# Create a note
+curl -X POST http://localhost:8788/mcp/call_tool \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tool": "CreateNote",
+    "name": "API Test",
+    "content": "Created via MCP API!"
+  }'
+```
+
+### Available Tools
+
+- **CreateNote** - Create new notes
+- **ListNotes** - List all notes with metadata
+- **SearchNotes** - Full-text search across notes
+- **ReadNote** - Read note content
+- **UpdateNote** - Replace note content
+- **AppendToNote** - Add content to end of note
+- **DeleteNote** - Delete a note
+- **ListTags** - Get all tags used in notes
+
+### Integration Examples
+
+**Python Script:**
+```python
+import requests
+
+def create_note(title, content):
+    response = requests.post('http://localhost:8788/mcp/call_tool',
+        json={
+            'tool': 'CreateNote',
+            'name': title,
+            'content': content
+        })
+    return response.json()
+
+create_note("Python Note", "Created from Python!")
+```
+
+**n8n Workflow:**
+Use the HTTP Request node to call the MCP API and automate note creation from webhooks, emails, RSS feeds, etc.
+
+**Complete Documentation:**
+See [`docs/MCP_INTEGRATION.md`](docs/MCP_INTEGRATION.md) for detailed examples including:
+- curl commands
+- Python scripts  
+- JavaScript/Node.js
+- n8n workflows
+- Deployment options (Cloudflare Tunnel, Tailscale, VPN)
+
+## 🎛️ Background Mode & Control
+
+NotNative can run in the background, keeping the MCP server active even when the window is hidden.
+
+### Single Instance
+
+Only one instance of NotNative can run at a time. If you try to launch it again:
+
+```bash
+$ notnative-app
+❌ NotNative ya está corriendo (PID: 123456)
+💡 Si crees que esto es un error, elimina: /tmp/notnative.lock
+```
+
+### Hide to Background
+
+When you close the window (X button or Ctrl+Q), NotNative **minimizes to background** instead of closing:
+- Window becomes hidden
+- MCP Server stays active on port 8788
+- Music player continues playing
+- All functionality remains available
+
+### Control Script
+
+Use the included `notnative-control.sh` script to control the app:
+
+```bash
+# Show window
+./notnative-control.sh show
+
+# Hide window
+./notnative-control.sh hide
+
+# Toggle show/hide
+./notnative-control.sh toggle
+
+# Quit completely
+./notnative-control.sh quit
+```
+
+Or directly:
+```bash
+echo "show" > /tmp/notnative.control
+echo "hide" > /tmp/notnative.control
+echo "quit" > /tmp/notnative.control
+```
+
+### Waybar Integration
+
+Add to your `~/.config/waybar/config`:
+
+```json
+{
+  "modules-right": ["custom/notnative", "..."],
+  
+  "custom/notnative": {
+    "format": "📝 NotNative",
+    "on-click": "/path/to/notnative-control.sh toggle",
+    "on-click-right": "/path/to/notnative-control.sh quit",
+    "tooltip": "Click: Show/Hide | Right-click: Quit"
+  }
+}
+```
+
+### Hyprland Shortcuts
+
+Add to `~/.config/hypr/hyprland.conf`:
+
+```conf
+# Toggle NotNative window
+bind = SUPER, N, exec, /path/to/notnative-control.sh toggle
+
+# Quit NotNative
+bind = SUPER_SHIFT, N, exec, /path/to/notnative-control.sh quit
+```
+
+**Complete Documentation:**
+See [`docs/BACKGROUND_CONTROL.md`](docs/BACKGROUND_CONTROL.md) for detailed guide.
 
 ## ⌨️ Keyboard Shortcuts
 
@@ -503,26 +671,49 @@ This seamless integration means NotNative always matches your Omarchy desktop ap
 - [ ] Export current note to PDF
 - [ ] Export all notes (zip)
 
+### 🚀 Implemented in v0.1.5-preview
+
+#### 12. MCP Server (Model Context Protocol) ✅ IMPLEMENTED
+- [x] REST API server on port 8788
+- [x] 8 core tools (CreateNote, ListNotes, SearchNotes, ReadNote, UpdateNote, AppendToNote, DeleteNote, ListTags)
+- [x] JSON-RPC 2.0 protocol
+- [x] CORS enabled for external access
+- [x] Auto-refresh UI when notes change via MCP
+- [x] Complete documentation with examples
+- [ ] API Key authentication (pending)
+- [ ] External tool registry UI (pending)
+
+#### 13. AI Chat Integration ✅ IMPLEMENTED
+- [x] OpenAI API integration
+- [x] OpenRouter support for multiple models
+- [x] Chat with note context
+- [x] Intelligent note creation from conversations
+- [x] MCP tools available to AI
+- [x] Streaming responses
+- [ ] Chat memory/history (pending)
+- [ ] Multiple conversation threads (pending)
+
+#### 14. Background Mode & Control ✅ IMPLEMENTED
+- [x] Single instance detection with PID lock
+- [x] Hide to background when closing window
+- [x] MCP Server stays active in background
+- [x] File-based control system (/tmp/notnative.control)
+- [x] Shell script for easy control (notnative-control.sh)
+- [x] Waybar integration examples
+- [x] Hyprland shortcuts support
+- [x] Auto-cleanup of temp files
+- [x] Complete documentation
+
 ### 🚀 Future (v0.2+)
 
-#### 13. Hyprland Integration
+#### 15. Hyprland Layer Shell Integration
 - [ ] Layer-shell for overlay mode
-- [ ] IPC with Hyprland
-- [ ] Compositor global shortcuts
+- [ ] Enhanced IPC with Hyprland
+- [ ] Compositor-level global shortcuts
 - [ ] Floating "quick note" mode
+- [ ] Window animations and effects
 
-#### 14. AI API (OpenRouter)
-- [ ] OpenRouter API integration
-- [ ] Automatic summaries of long notes
-- [ ] Chat with note context
-- [ ] Intelligent suggestions and autocompletion
-
-#### 15. MCP (Model Context Protocol)
-- [ ] MCP server to expose notes
-- [ ] Integration with MCP tools
-- [ ] Extensions via MCP
-
-#### 16. Synchronization (Optional)
+#### 16. Export & Publishing
 - [ ] Basic Git sync
 - [ ] Sync with cloud services (Nextcloud, Syncthing)
 - [ ] Conflict detection and resolution
@@ -532,11 +723,12 @@ This seamless integration means NotNative always matches your Omarchy desktop ap
 ## 🗓️ Version Roadmap
 
 - [x] **v0.1.0** - Functional editor with markdown, sidebar and folders ✅
-- [x] **v0.1.1** - SQLite indexing, full-text search, tags, YouTube integration, TODO checkboxes, images, drag & drop, preferences ✅ **CURRENT**
-- [ ] **v0.2** - Export, preview improvements, about dialog
-- [ ] **v0.3** - Hyprland integration, global shortcuts
-- [ ] **v0.4** - AI API (OpenRouter)
-- [ ] **v0.5** - MCP integration
+- [x] **v0.1.1** - SQLite indexing, full-text search, tags, YouTube integration, TODO checkboxes, images, drag & drop, preferences ✅
+- [x] **v0.1.5-preview** - MCP Server, AI Chat, Background Mode, External Automation ✅ **CURRENT**
+- [ ] **v0.2** - Export, preview improvements, about dialog, API Key authentication
+- [ ] **v0.3** - Hyprland integration improvements, global shortcuts
+- [ ] **v0.4** - AI enhancements, chat memory, context improvements
+- [ ] **v0.5** - External MCP registry, plugin system
 - [ ] **v0.6** - Cloud synchronization
 - [ ] **v1.0** - Stabilization and release
 
@@ -658,10 +850,10 @@ Contributions are welcome! Please open an issue first to discuss major changes.
 
 ## 📊 Project Status
 
-**Current Version**: v0.1.1  
+**Current Version**: v0.1.5-preview  
 **Last Updated**: November 2025  
-**Status**: Alpha - Feature-rich with YouTube integration, full-text search, drag & drop, and preferences  
-**Lines of Code**: ~4000 lines of Rust  
+**Status**: Alpha - Advanced features with MCP Server, AI integration, background mode, and external automation  
+**Lines of Code**: ~6000 lines of Rust  
 **Tests**: 27 passing tests
 
 ---
