@@ -2,7 +2,7 @@
 
 <div align="center">
 
-**Your second brain. Native, fast, and powerful.**
+**Your second brain. Native, fast, and powerful FOR OMARCHY LOVERS**
 
 A modern note-taking app built for Linux with Vim-like editing, AI chat, MCP automation, and YouTube integration.
 
@@ -52,6 +52,8 @@ https://github.com/k4ditano/notnative-app/raw/master/screenshots/screensaver.mp4
 **🌍 Multi-language** - Full i18n support (English/Spanish). More languages coming.
 
 **🎨 Beautiful** - Adaptive themes. Markdown rendering. Clean, distraction-free interface.
+
+**🖌️ Omarchy Themes** - Native integration with Omarchy theme system. Works with Aether and Omarchist theme apps.
 
 ---
 
@@ -114,6 +116,8 @@ sudo ./install.sh
 - **Folder organization** - Nested folders, drag & drop
 - **Full-text search** - Find anything instantly with SQLite FTS
 - **Tag system** - Organize with tags, auto-completion included
+- **Omarchy theme integration** - Auto-adapts to system themes from Aether and Omarchist apps
+- **Real-time theme switching** - Changes instantly when you switch themes
 
 ---
 
