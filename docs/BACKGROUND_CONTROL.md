@@ -1,50 +1,50 @@
-# Sistema de Control en Segundo Plano
+# Background Control System
 
-NotNative ahora puede ejecutarse en segundo plano y ser controlado desde scripts externos, waybar, o hyprland.
+NotNative can now run in the background and be controlled from external scripts, waybar, or hyprland.
 
-## Funcionalidades Implementadas
+## Implemented Features
 
 ### 1. Single Instance Detection
-- Solo permite una instancia de la app corriendo al mismo tiempo
-- Lock file en `/tmp/notnative.lock` con el PID del proceso
-- Validación de PID antes de rechazar (detecta procesos muertos)
-- Limpieza automática al salir
+- Only allows one instance of the app running at the same time
+- Lock file at `/tmp/notnative.lock` with the process PID
+- PID validation before rejecting (detects dead processes)
+- Automatic cleanup on exit
 
 ```bash
-# Si intentas abrir otra instancia:
+# If you try to open another instance:
 $ notnative-app
-❌ NotNative ya está corriendo (PID: 123456)
-💡 Si crees que esto es un error, elimina: /tmp/notnative.lock
+❌ NotNative is already running (PID: 123456)
+💡 If you think this is an error, remove: /tmp/notnative.lock
 ```
 
 ### 2. Window Hide/Show
-- Al cerrar la ventana (X o Ctrl+Q), la app se minimiza a segundo plano
-- La app sigue corriendo (MCP Server activo, música reproduciéndose)
-- Ventana se puede mostrar/ocultar bajo demanda
+- When closing the window (X or Ctrl+Q), the app minimizes to background
+- The app keeps running (MCP Server active, music playing)
+- Window can be shown/hidden on demand
 
-### 3. Sistema de Control por Archivos
-Como GTK4/Wayland no soporta system tray tradicional, usamos un sistema de control basado en archivos:
+### 3. File-based Control System
+Since GTK4/Wayland doesn't support traditional system tray, we use a file-based control system:
 
 ```bash
-# Script helper incluido
-./notnative-control.sh show    # Mostrar ventana
-./notnative-control.sh hide    # Ocultar ventana  
-./notnative-control.sh toggle  # Alternar
-./notnative-control.sh quit    # Cerrar completamente
+# Included helper script
+./notnative-control.sh show    # Show window
+./notnative-control.sh hide    # Hide window  
+./notnative-control.sh toggle  # Toggle visibility
+./notnative-control.sh quit    # Quit completely
 ```
 
-O directamente:
+Or directly:
 ```bash
 echo "show" > /tmp/notnative.control
 echo "hide" > /tmp/notnative.control
 echo "quit" > /tmp/notnative.control
 ```
 
-La app monitorea `/tmp/notnative.control` cada 500ms y ejecuta comandos automáticamente.
+The app monitors `/tmp/notnative.control` every 500ms and executes commands automatically.
 
-### 4. Integración con Waybar
+### 4. Waybar Integration
 
-Agregar a tu configuración de waybar (`~/.config/waybar/config`):
+Add to your waybar config (`~/.config/waybar/config`):
 
 ```json
 {
@@ -52,89 +52,89 @@ Agregar a tu configuración de waybar (`~/.config/waybar/config`):
   
   "custom/notnative": {
     "format": "📝 NotNative",
-    "on-click": "/ruta/a/notnative-control.sh toggle",
-    "on-click-right": "/ruta/a/notnative-control.sh quit",
+    "on-click": "/path/to/notnative-control.sh toggle",
+    "on-click-right": "/path/to/notnative-control.sh quit",
     "tooltip": true,
-    "tooltip-format": "Click: Mostrar/Ocultar\nClick derecho: Salir"
+    "tooltip-format": "Click: Show/Hide\nRight click: Quit"
   }
 }
 ```
 
-### 5. Integración con Hyprland
+### 5. Hyprland Integration
 
-Agregar atajos de teclado en `~/.config/hypr/hyprland.conf`:
+Add keyboard shortcuts in `~/.config/hypr/hyprland.conf`:
 
 ```conf
-# Mostrar/ocultar NotNative
-bind = SUPER, N, exec, /ruta/a/notnative-control.sh toggle
+# Show/hide NotNative
+bind = SUPER, N, exec, /path/to/notnative-control.sh toggle
 
-# Cerrar NotNative completamente
-bind = SUPER_SHIFT, N, exec, /ruta/a/notnative-control.sh quit
+# Quit NotNative completely
+bind = SUPER_SHIFT, N, exec, /path/to/notnative-control.sh quit
 ```
 
-## Casos de Uso
+## Use Cases
 
-### MCP Server siempre disponible
+### MCP Server Always Available
 ```bash
-# Iniciar NotNative en segundo plano al login
+# Start NotNative in background at login
 notnative-app &
 
-# Ocultar ventana si está visible
+# Hide window if visible
 ./notnative-control.sh hide
 
-# Ahora el MCP Server está disponible 24/7 en http://localhost:8788
-# Puedes crear notas desde n8n, scripts, etc. sin tener la ventana visible
+# Now the MCP Server is available 24/7 at http://localhost:8788
+# You can create notes from n8n, scripts, etc. without having the window visible
 ```
 
-### Workflow con Waybar
-1. Click en icono waybar → ventana aparece
-2. Trabajas en tus notas
-3. Cierras la ventana (X) → se minimiza
-4. MCP Server sigue activo
-5. Click derecho en waybar → app se cierra completamente
+### Workflow with Waybar
+1. Click on waybar icon → window appears
+2. Work on your notes
+3. Close the window (X) → minimizes to background
+4. MCP Server stays active
+5. Right click on waybar → app closes completely
 
-### Control desde Scripts
+### Control from Scripts
 ```bash
 #!/bin/bash
-# Crear nota desde script externo
+# Create note from external script
 
-# Asegurar que NotNative está corriendo
+# Ensure NotNative is running
 if [ ! -f /tmp/notnative.lock ]; then
     notnative-app &
     sleep 2
 fi
 
-# Crear nota vía MCP
+# Create note via MCP
 curl -X POST http://localhost:8788/mcp/call_tool \
   -H "Content-Type: application/json" \
   -d '{
     "tool": "CreateNote",
     "name": "Script Note",
-    "content": "Creada desde script"
+    "content": "Created from script"
   }'
 
-# Mostrar ventana para ver la nota
+# Show window to view the note
 ./notnative-control.sh show
 ```
 
-## Archivos de Control
+## Control Files
 
-- `/tmp/notnative.lock` - Lock file con PID (evita múltiples instancias)
-- `/tmp/notnative.control` - Comandos para controlar la app (show/hide/quit)
-- `/tmp/notnative_mcp_update.signal` - Señal de cambios MCP (auto-refresh)
+- `/tmp/notnative.lock` - Lock file with PID (prevents multiple instances)
+- `/tmp/notnative.control` - Commands to control the app (show/hide/quit)
+- `/tmp/notnative_mcp_update.signal` - MCP changes signal (auto-refresh)
 
-Todos se limpian automáticamente al cerrar la app.
+All are automatically cleaned up when closing the app.
 
-## Limitaciones
+## Limitations
 
-- **No hay icono visual en system tray**: GTK4 + Wayland no soportan libappindicator tradicional
-- **Solución alternativa**: Usa waybar custom module o scripts de control
-- **System tray real**: Requeriría implementar D-Bus StatusNotifierItem (complejo)
+- **No visual system tray icon**: GTK4 + Wayland don't support traditional libappindicator
+- **Alternative solution**: Use waybar custom module or control scripts
+- **Real system tray**: Would require implementing D-Bus StatusNotifierItem (complex)
 
-## Ventajas del Sistema Actual
+## Advantages of Current System
 
-✅ Funciona perfectamente en Wayland/Hyprland  
-✅ Integrable con waybar, rofi, cualquier script  
-✅ No requiere dependencias extra (D-Bus, etc)  
-✅ Simple y confiable  
-✅ MCP Server siempre disponible en segundo plano  
+✅ Works perfectly on Wayland/Hyprland  
+✅ Integrable with waybar, rofi, any script  
+✅ No extra dependencies required (D-Bus, etc)  
+✅ Simple and reliable  
+✅ MCP Server always available in background  
