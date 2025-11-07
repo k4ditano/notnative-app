@@ -5,20 +5,27 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::core::{NotesDatabase, NotesDirectory};
+use crate::i18n::I18n;
 use crate::mcp::tools::{MCPToolCall, MCPToolResult};
 
 /// Ejecutor de herramientas MCP
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MCPToolExecutor {
     notes_dir: NotesDirectory,
     notes_db: Rc<RefCell<NotesDatabase>>,
+    i18n: Rc<RefCell<I18n>>,
 }
 
 impl MCPToolExecutor {
-    pub fn new(notes_dir: NotesDirectory, notes_db: Rc<RefCell<NotesDatabase>>) -> Self {
+    pub fn new(
+        notes_dir: NotesDirectory,
+        notes_db: Rc<RefCell<NotesDatabase>>,
+        i18n: Rc<RefCell<I18n>>,
+    ) -> Self {
         Self {
             notes_dir,
             notes_db,
+            i18n,
         }
     }
 
@@ -162,7 +169,7 @@ impl MCPToolExecutor {
 
                 Ok(MCPToolResult::success(json!({
                     "note_name": note.name(),
-                    "message": format!("✓ Nota '{}' creada exitosamente", note.name()),
+                    "message": self.i18n.borrow().t("mcp_note_created").replace("{}", note.name()),
                     "path": note.path().to_str().unwrap_or("")
                 })))
             }
@@ -177,10 +184,9 @@ impl MCPToolExecutor {
         match self.notes_dir.find_note(name) {
             Ok(Some(note)) => match note.read() {
                 Ok(content) => Ok(MCPToolResult::success(json!({
-                    "name": name,
+                    "note_name": name,
                     "content": content,
-                    "size": content.len(),
-                    "message": format!("✓ Nota '{}' leída correctamente", name)
+                    "message": self.i18n.borrow().t("mcp_note_read").replace("{}", name)
                 }))),
                 Err(e) => Ok(MCPToolResult::error(format!(
                     "Error leyendo nota '{}': {}",
@@ -215,7 +221,7 @@ impl MCPToolExecutor {
 
                         Ok(MCPToolResult::success(json!({
                             "note_name": name,
-                            "message": format!("✓ Nota '{}' actualizada exitosamente", name),
+                            "message": self.i18n.borrow().t("mcp_note_updated").replace("{}", name),
                             "size": content.len()
                         })))
                     }
@@ -264,7 +270,7 @@ impl MCPToolExecutor {
 
                                 Ok(MCPToolResult::success(json!({
                                     "note_name": name,
-                                    "message": format!("✓ Contenido agregado a '{}' exitosamente", name),
+                                    "message": self.i18n.borrow().t("mcp_content_appended").replace("{}", name),
                                     "new_size": new_content.len(),
                                     "appended_chars": content.len()
                                 })))
@@ -304,7 +310,7 @@ impl MCPToolExecutor {
 
                         Ok(MCPToolResult::success(json!({
                             "note_name": name,
-                            "message": format!("✓ Nota '{}' eliminada exitosamente", name)
+                            "message": self.i18n.borrow().t("mcp_note_deleted").replace("{}", name)
                         })))
                     }
                     Err(e) => Ok(MCPToolResult::error(format!(
@@ -342,7 +348,7 @@ impl MCPToolExecutor {
         Ok(MCPToolResult::success(json!({
             "notes": note_names,
             "count": note_names.len(),
-            "message": format!("✓ {} notas encontradas", note_names.len())
+            "message": self.i18n.borrow().t("mcp_notes_found").replace("{}", &note_names.len().to_string())
         })))
     }
 
@@ -355,7 +361,7 @@ impl MCPToolExecutor {
                     "results": note_names,
                     "count": results.len(),
                     "query": query,
-                    "message": format!("✓ {} resultados para '{}'", results.len(), query)
+                    "message": self.i18n.borrow().t("mcp_search_results").replace("{}", &results.len().to_string()).replace("{}", query)
                 })))
             }
             Err(e) => Ok(MCPToolResult::error(format!("Error buscando notas: {}", e))),
@@ -373,7 +379,7 @@ impl MCPToolExecutor {
                     "notes": note_names,
                     "count": results.len(),
                     "tag": tag,
-                    "message": format!("✓ {} notas con tag #{}", results.len(), tag)
+                    "message": self.i18n.borrow().t("mcp_notes_with_tag").replace("{}", &results.len().to_string()).replace("{}", tag)
                 })))
             }
             Err(e) => Ok(MCPToolResult::error(format!(
@@ -391,7 +397,7 @@ impl MCPToolExecutor {
                 Ok(MCPToolResult::success(json!({
                     "tags": tag_names,
                     "count": tag_names.len(),
-                    "message": format!("✓ {} tags encontrados", tag_names.len())
+                    "message": self.i18n.borrow().t("mcp_tags_found").replace("{}", &tag_names.len().to_string())
                 })))
             }
             Err(e) => Ok(MCPToolResult::error(format!(
@@ -412,7 +418,7 @@ impl MCPToolExecutor {
             Ok(_) => Ok(MCPToolResult::success(json!({
                 "folder_name": name,
                 "path": folder_path.to_str().unwrap_or(""),
-                "message": format!("✓ Carpeta '{}' creada exitosamente", name)
+                "message": self.i18n.borrow().t("mcp_folder_created").replace("{}", name)
             }))),
             Err(e) => Ok(MCPToolResult::error(format!(
                 "Error creando carpeta '{}': {}",
@@ -442,7 +448,7 @@ impl MCPToolExecutor {
         Ok(MCPToolResult::success(json!({
             "folders": folders,
             "count": folders.len(),
-            "message": format!("✓ {} carpetas encontradas", folders.len())
+            "message": self.i18n.borrow().t("mcp_folders_found").replace("{}", &folders.len().to_string())
         })))
     }
 

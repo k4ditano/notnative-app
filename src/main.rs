@@ -137,6 +137,7 @@ fn load_theme_css() -> (String, bool) {
 fn main() -> anyhow::Result<()> {
     // Single instance detection
     let lock_file_path = "/tmp/notnative.lock";
+    let control_file_path = "/tmp/notnative.control";
 
     // Verificar si ya existe una instancia
     if std::path::Path::new(lock_file_path).exists() {
@@ -146,12 +147,18 @@ fn main() -> anyhow::Result<()> {
                 // Verificar si el proceso realmente existe
                 let proc_path = format!("/proc/{}", pid);
                 if std::path::Path::new(&proc_path).exists() {
-                    eprintln!("❌ NotNative ya está corriendo (PID: {})", pid);
-                    eprintln!(
-                        "💡 Si crees que esto es un error, elimina: {}",
-                        lock_file_path
-                    );
-                    std::process::exit(1);
+                    // El proceso existe, enviar comando para mostrar la ventana
+                    println!("✅ NotNative ya está corriendo (PID: {})", pid);
+                    println!("📱 Mostrando ventana existente...");
+
+                    // Enviar comando "show" a través del archivo de control
+                    if let Err(e) = std::fs::write(control_file_path, "show") {
+                        eprintln!("⚠️ Error enviando comando show: {}", e);
+                        eprintln!("💡 Puedes mostrar la ventana manualmente con:");
+                        eprintln!("   echo 'show' > {}", control_file_path);
+                    }
+
+                    std::process::exit(0);
                 }
             }
         }

@@ -171,6 +171,8 @@ pub struct MainApp {
     mcp_executor: Rc<RefCell<crate::mcp::MCPToolExecutor>>,
     mcp_registry: crate::mcp::MCPToolRegistry,
     mcp_last_update_check: Rc<RefCell<u64>>, // Último timestamp verificado
+    // System Tray - Estado de visibilidad compartido
+    window_visible: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -625,37 +627,7 @@ impl SimpleComponent for MainApp {
         let db_path = notes_dir.db_path();
         let notes_db = NotesDatabase::new(&db_path).expect("No se pudo crear la base de datos");
 
-        // Inicializar sistema MCP (Model Context Protocol)
-        // Crear wrapper Rc<RefCell> para NotesDatabase (necesario para compartir en async)
-        let notes_db_rc = Rc::new(RefCell::new(notes_db.clone_connection()));
-        let mcp_executor = Rc::new(RefCell::new(crate::mcp::MCPToolExecutor::new(
-            notes_dir.clone(),
-            notes_db_rc,
-        )));
-        // Usar solo herramientas core para mejor rendimiento y precisión
-        let mcp_registry = crate::mcp::MCPToolRegistry::new_core();
-        println!(
-            "Sistema MCP inicializado con {} herramientas core",
-            mcp_registry.get_tools().len()
-        );
-
-        // Iniciar servidor MCP en segundo plano
-        let notes_dir_for_server = notes_dir.clone();
-        let notes_db_for_server =
-            std::sync::Arc::new(std::sync::Mutex::new(notes_db.clone_connection()));
-
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().expect("No se pudo crear runtime de Tokio");
-            rt.block_on(async {
-                if let Err(e) =
-                    crate::mcp::start_mcp_server(notes_dir_for_server, notes_db_for_server).await
-                {
-                    eprintln!("❌ Error iniciando servidor MCP: {}", e);
-                }
-            });
-        });
-
-        // Cargar configuración
+        // Cargar configuración (necesario antes de crear MCP para tener idioma)
         let config_path = NotesConfig::default_path();
         let notes_config = NotesConfig::load(&config_path).unwrap_or_else(|_| {
             println!("No se pudo cargar configuración, creando una nueva");
@@ -671,6 +643,42 @@ impl SimpleComponent for MainApp {
 
         let i18n = Rc::new(RefCell::new(I18n::new(language)));
         println!("Idioma detectado: {:?}", language);
+
+        // Inicializar sistema MCP (Model Context Protocol)
+        // Crear wrapper Rc<RefCell> para NotesDatabase (necesario para compartir en async)
+        let notes_db_rc = Rc::new(RefCell::new(notes_db.clone_connection()));
+        let mcp_executor = Rc::new(RefCell::new(crate::mcp::MCPToolExecutor::new(
+            notes_dir.clone(),
+            notes_db_rc,
+            i18n.clone(),
+        )));
+        // Usar solo herramientas core para mejor rendimiento y precisión
+        let mcp_registry = crate::mcp::MCPToolRegistry::new_core();
+        println!(
+            "Sistema MCP inicializado con {} herramientas core",
+            mcp_registry.get_tools().len()
+        );
+
+        // Iniciar servidor MCP en segundo plano
+        let notes_dir_for_server = notes_dir.clone();
+        let notes_db_for_server =
+            std::sync::Arc::new(std::sync::Mutex::new(notes_db.clone_connection()));
+        let i18n_for_server = std::sync::Arc::new(std::sync::Mutex::new(i18n.borrow().clone()));
+
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("No se pudo crear runtime de Tokio");
+            rt.block_on(async {
+                if let Err(e) = crate::mcp::start_mcp_server(
+                    notes_dir_for_server,
+                    notes_db_for_server,
+                    i18n_for_server,
+                )
+                .await
+                {
+                    eprintln!("❌ Error iniciando servidor MCP: {}", e);
+                }
+            });
+        });
 
         // Indexar todas las notas existentes
         println!("Indexando notas existentes...");
@@ -939,13 +947,15 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
         let music_player_content = gtk::Box::new(gtk::Orientation::Vertical, 12);
         music_player_content.set_margin_all(12);
         music_player_content.set_width_request(350);
-        music_player_content.append(
-            &gtk::Label::builder()
-                .label("<b>Reproductor de Música</b>")
-                .use_markup(true)
-                .xalign(0.0)
-                .build(),
-        );
+
+        // Crear label dinámico para el título (se actualizará con traducciones)
+        let music_player_title = gtk::Label::builder()
+            .label(&format!("<b>{}</b>", i18n.borrow().t("music_player_title")))
+            .use_markup(true)
+            .xalign(0.0)
+            .build();
+
+        music_player_content.append(&music_player_title);
         music_player_content.append(&music_search_entry);
         music_player_content.append(&music_results_scroll);
         music_player_content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
@@ -1287,14 +1297,13 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
         let chat_header_content = gtk::Box::new(gtk::Orientation::Vertical, 4);
         chat_header_content.add_css_class("chat-header-content");
 
-        let chat_model_label = gtk::Label::new(Some("Modelo: OpenAI GPT-4"));
+        let chat_model_label = gtk::Label::new(Some(&i18n.borrow().t("chat_model_default")));
         chat_model_label.add_css_class("chat-model-label");
         chat_model_label.add_css_class("chat-header-title");
         chat_model_label.set_xalign(0.0);
         chat_header_content.append(&chat_model_label);
 
-        let chat_header_subtitle =
-            gtk::Label::new(Some("Combina tus notas con el asistente en tiempo real"));
+        let chat_header_subtitle = gtk::Label::new(Some(&i18n.borrow().t("chat_subtitle")));
         chat_header_subtitle.add_css_class("chat-header-subtitle");
         chat_header_subtitle.set_xalign(0.0);
         chat_header_content.append(&chat_header_subtitle);
@@ -1338,7 +1347,7 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
         context_header.add_css_class("chat-context-header");
 
         let context_label = gtk::Label::builder()
-            .label("Contexto")
+            .label(&i18n.borrow().t("chat_context"))
             .xalign(0.0)
             .hexpand(true)
             .build();
@@ -1371,7 +1380,7 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
 
         let chat_attach_button = gtk::Button::builder()
             .icon_name("list-add-symbolic")
-            .tooltip_text("Adjuntar nota actual")
+            .tooltip_text(&i18n.borrow().t("chat_attach_note"))
             .build();
         chat_attach_button.add_css_class("flat");
         chat_attach_button.add_css_class("circular");
@@ -1387,7 +1396,7 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
 
         let chat_clear_button = gtk::Button::builder()
             .icon_name("edit-clear-symbolic")
-            .tooltip_text("Limpiar contexto")
+            .tooltip_text(&i18n.borrow().t("chat_clear_context"))
             .build();
         chat_clear_button.add_css_class("flat");
         chat_clear_button.add_css_class("circular");
@@ -1403,7 +1412,7 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
 
         let chat_history_button = gtk::Button::builder()
             .icon_name("user-trash-symbolic")
-            .tooltip_text("Borrar historial")
+            .tooltip_text(&i18n.borrow().t("chat_clear_history"))
             .build();
         chat_history_button.add_css_class("flat");
         chat_history_button.add_css_class("circular");
@@ -1469,10 +1478,12 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
         chat_input_view.add_css_class("chat-input");
 
         // Agregar placeholder inicial
-        chat_input_buffer.set_text("Escribe tu mensaje aquí...");
+        let chat_placeholder = i18n.borrow().t("chat_input_placeholder");
+        chat_input_buffer.set_text(&chat_placeholder);
 
         // Limpiar placeholder al hacer focus
         let focus_controller = gtk::EventControllerFocus::new();
+        let placeholder_clone = chat_placeholder.clone();
         focus_controller.connect_enter(gtk::glib::clone!(
             #[strong]
             chat_input_buffer,
@@ -1480,7 +1491,7 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
                 let start = chat_input_buffer.start_iter();
                 let end = chat_input_buffer.end_iter();
                 let text = chat_input_buffer.text(&start, &end, false).to_string();
-                if text == "Escribe tu mensaje aquí..." {
+                if text == placeholder_clone {
                     chat_input_buffer.set_text("");
                 }
             }
@@ -1492,12 +1503,13 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
         input_area.append(&input_wrapper);
 
         let chat_send_button = gtk::Button::builder()
-            .label("Enviar")
+            .label(&i18n.borrow().t("chat_send"))
             .icon_name("mail-send-symbolic")
             .build();
         chat_send_button.set_valign(gtk::Align::Center);
         chat_send_button.add_css_class("chat-send-button");
         chat_send_button.add_css_class("chat-action-primary");
+        let placeholder_for_send = chat_placeholder.clone();
         chat_send_button.connect_clicked(gtk::glib::clone!(
             #[strong]
             sender,
@@ -1508,7 +1520,7 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
                 let end = chat_input_buffer.end_iter();
                 let text = chat_input_buffer.text(&start, &end, false).to_string();
 
-                if !text.trim().is_empty() && text != "Escribe tu mensaje aquí..." {
+                if !text.trim().is_empty() && text != placeholder_for_send {
                     sender.input(AppMsg::SendChatMessage(text));
                 }
             }
@@ -1652,6 +1664,7 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
             mcp_executor,
             mcp_registry,
             mcp_last_update_check: Rc::new(RefCell::new(0)),
+            window_visible: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         };
 
         // Guardar el sender en el modelo
@@ -2624,8 +2637,12 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
             gtk::glib::ControlFlow::Continue
         });
 
-        // Crear system tray icon
-        crate::system_tray::create_system_tray(sender.clone());
+        // Crear system tray icon (pasar i18n para traducciones y estado de visibilidad)
+        crate::system_tray::create_system_tray(
+            sender.clone(),
+            model.i18n.clone(),
+            model.window_visible.clone(),
+        );
 
         ComponentParts { model, widgets }
     }
@@ -3014,13 +3031,48 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
 
             AppMsg::MinimizeToTray => {
                 println!("📱 Minimizando a bandeja del sistema...");
+                // Guardar cambios antes de minimizar
+                sender.input(AppMsg::SaveCurrentNote);
                 self.main_window.set_visible(false);
+                // Actualizar estado para el system tray
+                self.window_visible
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
             }
 
             AppMsg::ShowWindow => {
                 println!("📱 Mostrando ventana desde bandeja...");
+
+                // En Wayland/Hyprland, necesitamos esta secuencia específica:
+                // 1. Primero hacer visible
                 self.main_window.set_visible(true);
+
+                // 2. Actualizar estado para el system tray
+                self.window_visible
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+
+                // 3. Forzar update del display
+                self.main_window.queue_draw();
+
+                // 4. Present con foco
                 self.main_window.present();
+                self.main_window
+                    .present_with_time((gtk::glib::monotonic_time() / 1000) as u32);
+
+                // 5. Forzar activación
+                if let Some(surface) = self.main_window.surface() {
+                    surface.queue_render();
+                }
+
+                // 6. Dar foco al editor
+                gtk::glib::idle_add_local_once(gtk::glib::clone!(
+                    #[strong(rename_to = text_view)]
+                    self.text_view,
+                    move || {
+                        text_view.grab_focus();
+                    }
+                ));
+
+                println!("✅ Ventana mostrada y activada");
             }
 
             AppMsg::QuitApp => {

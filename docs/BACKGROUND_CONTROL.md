@@ -1,29 +1,38 @@
+````markdown
 # Background Control System
 
-NotNative can now run in the background and be controlled from external scripts, waybar, or hyprland.
+NotNative can now run in the background and be controlled from external scripts, waybar, hyprland, or the system tray icon.
 
 ## Implemented Features
 
-### 1. Single Instance Detection
+### 1. System Tray Icon (NEW!)
+- Real system tray icon using StatusNotifierItem (modern Wayland/X11 standard)
+- Works with: waybar, swaybar, KDE Plasma, GNOME Shell, and any SNI-compatible panel
+- Left click: Show/Hide window
+- Right click: Menu with options (Show, Hide, Exit)
+- **Icon automatically appears when window is hidden**
+
+### 2. Single Instance Detection
 - Only allows one instance of the app running at the same time
 - Lock file at `/tmp/notnative.lock` with the process PID
 - PID validation before rejecting (detects dead processes)
-- Automatic cleanup on exit
+- **When trying to open a second instance, it shows the existing window instead of failing**
 
 ```bash
 # If you try to open another instance:
 $ notnative-app
-❌ NotNative is already running (PID: 123456)
-💡 If you think this is an error, remove: /tmp/notnative.lock
+✅ NotNative is already running (PID: 123456)
+� Showing existing window...
 ```
 
-### 2. Window Hide/Show
-- When closing the window (X or Ctrl+Q), the app minimizes to background
+### 3. Window Hide/Show
+- When closing the window (X or Ctrl+Q), the app minimizes to system tray
 - The app keeps running (MCP Server active, music playing)
-- Window can be shown/hidden on demand
+- **System tray icon appears when window is hidden**
+- Click the tray icon to restore the window
 
-### 3. File-based Control System
-Since GTK4/Wayland doesn't support traditional system tray, we use a file-based control system:
+### 4. File-based Control System (Fallback)
+For advanced users or if the tray icon doesn't work on your panel:
 
 ```bash
 # Included helper script
@@ -127,14 +136,19 @@ All are automatically cleaned up when closing the app.
 
 ## Limitations
 
-- **No visual system tray icon**: GTK4 + Wayland don't support traditional libappindicator
-- **Alternative solution**: Use waybar custom module or control scripts
-- **Real system tray**: Would require implementing D-Bus StatusNotifierItem (complex)
+- **System tray icon requires a StatusNotifierItem-compatible panel**:
+  - ✅ Works: waybar, swaybar, KDE Plasma, GNOME Shell (with extension), tint2, xfce4-panel
+  - ❌ May not work: Very old or minimal panels
+- **Fallback available**: File-based control system works everywhere
 
 ## Advantages of Current System
 
-✅ Works perfectly on Wayland/Hyprland  
-✅ Integrable with waybar, rofi, any script  
-✅ No extra dependencies required (D-Bus, etc)  
+✅ Real system tray icon on Wayland/Hyprland  
+✅ Works perfectly on modern Linux desktops  
+✅ Integrable with waybar, rofi, any script (fallback)  
+✅ No extra dependencies beyond D-Bus (already on all systems)  
 ✅ Simple and reliable  
 ✅ MCP Server always available in background  
+✅ Single instance with automatic window restoration  
+
+````  

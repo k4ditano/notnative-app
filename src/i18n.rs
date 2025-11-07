@@ -47,7 +47,7 @@ impl Language {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct I18n {
     language: Language,
     translations: HashMap<&'static str, (&'static str, &'static str)>,
@@ -384,8 +384,40 @@ impl I18n {
             ("Nombre de la playlist", "Playlist name"),
         );
 
+        // System Tray
+        translations.insert("tray_show_window", ("Mostrar ventana", "Show window"));
+        translations.insert("tray_hide_window", ("Ocultar ventana", "Hide window"));
+        translations.insert("tray_quit", ("Salir", "Quit"));
+
         // AI Chat
         translations.insert("ai_chat", ("Chat IA", "AI Chat"));
+        translations.insert(
+            "chat_input_placeholder",
+            ("Escribe tu mensaje aquí...", "Type your message here..."),
+        );
+        translations.insert("chat_send", ("Enviar", "Send"));
+        translations.insert(
+            "chat_model_default",
+            ("Modelo: OpenAI GPT-4", "Model: OpenAI GPT-4"),
+        );
+        translations.insert(
+            "chat_subtitle",
+            (
+                "Combina tus notas con el asistente en tiempo real",
+                "Combine your notes with the assistant in real time",
+            ),
+        );
+        translations.insert("chat_context", ("Contexto", "Context"));
+        translations.insert(
+            "chat_attach_note",
+            ("Adjuntar nota actual", "Attach current note"),
+        );
+        translations.insert("chat_clear_context", ("Limpiar contexto", "Clear context"));
+        translations.insert("chat_clear_history", ("Borrar historial", "Clear history"));
+        translations.insert(
+            "music_player_title",
+            ("Reproductor de Música", "Music Player"),
+        );
         translations.insert(
             "ai_chat_placeholder",
             (
@@ -416,6 +448,92 @@ impl I18n {
                 "Configurar API key en Preferencias",
                 "Configure API key in Preferences",
             ),
+        );
+
+        // MCP Messages
+        translations.insert(
+            "mcp_note_created",
+            (
+                "✓ Nota '{}' creada exitosamente",
+                "✓ Note '{}' created successfully",
+            ),
+        );
+        translations.insert(
+            "mcp_note_read",
+            (
+                "✓ Nota '{}' leída correctamente",
+                "✓ Note '{}' read successfully",
+            ),
+        );
+        translations.insert(
+            "mcp_note_updated",
+            (
+                "✓ Nota '{}' actualizada exitosamente",
+                "✓ Note '{}' updated successfully",
+            ),
+        );
+        translations.insert(
+            "mcp_note_deleted",
+            (
+                "✓ Nota '{}' eliminada exitosamente",
+                "✓ Note '{}' deleted successfully",
+            ),
+        );
+        translations.insert(
+            "mcp_content_appended",
+            (
+                "✓ Contenido agregado a '{}' exitosamente",
+                "✓ Content appended to '{}' successfully",
+            ),
+        );
+        translations.insert(
+            "mcp_notes_found",
+            ("✓ {} notas encontradas", "✓ {} notes found"),
+        );
+        translations.insert(
+            "mcp_search_results",
+            ("✓ {} resultados para '{}'", "✓ {} results for '{}'"),
+        );
+        translations.insert(
+            "mcp_notes_with_tag",
+            ("✓ {} notas con tag #{}", "✓ {} notes with tag #{}"),
+        );
+        translations.insert(
+            "mcp_tags_found",
+            ("✓ {} tags encontrados", "✓ {} tags found"),
+        );
+        translations.insert(
+            "mcp_tags_added",
+            ("✓ Tags agregados a '{}'", "✓ Tags added to '{}'"),
+        );
+        translations.insert(
+            "mcp_note_renamed",
+            (
+                "✓ Nota renombrada de '{}' a '{}'",
+                "✓ Note renamed from '{}' to '{}'",
+            ),
+        );
+        translations.insert(
+            "mcp_note_duplicated",
+            (
+                "✓ Nota '{}' duplicada como '{}'",
+                "✓ Note '{}' duplicated as '{}'",
+            ),
+        );
+        translations.insert(
+            "mcp_folder_created",
+            (
+                "✓ Carpeta '{}' creada exitosamente",
+                "✓ Folder '{}' created successfully",
+            ),
+        );
+        translations.insert(
+            "mcp_note_not_found",
+            ("Nota '{}' no encontrada", "Note '{}' not found"),
+        );
+        translations.insert(
+            "mcp_folders_found",
+            ("✓ {} carpetas encontradas", "✓ {} folders found"),
         );
 
         Self {

@@ -41,6 +41,9 @@ hyper = "1.0"
 # System management
 ctrlc = "3.4"
 
+# System tray (StatusNotifierItem para Wayland/X11)
+ksni = "0.2"
+
 [features]
 default = ["sqlite-bundled"]
 sqlite-bundled = ["rusqlite/bundled"]

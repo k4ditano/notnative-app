@@ -8,13 +8,16 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cell::RefCell;
 use std::fs;
 use std::net::SocketAddr;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::core::database::NotesDatabase;
 use crate::core::note_file::NotesDirectory;
+use crate::i18n::I18n;
 use crate::mcp::{MCPToolCall, MCPToolExecutor};
 
 /// Señaliza cambios en las notas para que la UI se actualice
@@ -32,6 +35,7 @@ fn signal_notes_changed() {
 pub struct MCPServerState {
     notes_dir: NotesDirectory,
     notes_db: Arc<Mutex<NotesDatabase>>,
+    i18n: Arc<Mutex<I18n>>,
 }
 
 /// Request para listar herramientas
@@ -84,10 +88,12 @@ pub struct ListToolsResponse {
 pub async fn start_mcp_server(
     notes_dir: NotesDirectory,
     notes_db: Arc<Mutex<NotesDatabase>>,
+    i18n: Arc<Mutex<I18n>>,
 ) -> Result<()> {
     let state = MCPServerState {
         notes_dir,
         notes_db,
+        i18n,
     };
 
     // Configurar CORS para permitir requests desde cualquier origen
@@ -151,9 +157,15 @@ async fn call_tool(
         db.clone_connection()
     };
 
+    let i18n_clone = {
+        let i18n = state.i18n.lock().unwrap();
+        i18n.clone()
+    };
+
     let executor = MCPToolExecutor::new(
         state.notes_dir.clone(),
         std::rc::Rc::new(std::cell::RefCell::new(notes_db_clone)),
+        std::rc::Rc::new(std::cell::RefCell::new(i18n_clone)),
     );
 
     // Intentar parsear la llamada a herramienta
