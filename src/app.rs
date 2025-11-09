@@ -184,6 +184,9 @@ pub struct MainApp {
     // File Watcher - Monitorea cambios en el filesystem
     #[allow(dead_code)]
     file_watcher: Option<crate::file_watcher::FileWatcher>,
+    // Cache para texto renderizado en modo Normal
+    cached_rendered_text: Rc<RefCell<Option<String>>>,
+    cached_source_text: Rc<RefCell<Option<String>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -231,6 +234,7 @@ pub enum AppMsg {
     CompleteTag(String), // Completar tag seleccionado
     ToggleSearch(bool),  // Toggle search bar
     SearchNotes(String), // Buscar notas
+    SaveAndSearchTag(String), // Guardar nota actual y luego buscar tag
     ShowPreferences,
     ShowKeyboardShortcuts,
     ShowAboutDialog,
@@ -1397,6 +1401,7 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
             .icon_name("list-add-symbolic")
             .tooltip_text(&i18n.borrow().t("chat_attach_note"))
             .build();
+        chat_attach_button.set_can_focus(true);
         chat_attach_button.add_css_class("flat");
         chat_attach_button.add_css_class("circular");
         chat_attach_button.add_css_class("chat-context-action");
@@ -1413,6 +1418,7 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
             .icon_name("edit-clear-symbolic")
             .tooltip_text(&i18n.borrow().t("chat_clear_context"))
             .build();
+        chat_clear_button.set_can_focus(true);
         chat_clear_button.add_css_class("flat");
         chat_clear_button.add_css_class("circular");
         chat_clear_button.add_css_class("chat-context-action");
@@ -1429,6 +1435,7 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
             .icon_name("user-trash-symbolic")
             .tooltip_text(&i18n.borrow().t("chat_clear_history"))
             .build();
+        chat_history_button.set_can_focus(true);
         chat_history_button.add_css_class("flat");
         chat_history_button.add_css_class("circular");
         chat_history_button.add_css_class("chat-context-action");
@@ -1558,6 +1565,7 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
             .icon_name("mail-send-symbolic")
             .build();
         chat_send_button.set_valign(gtk::Align::Center);
+        chat_send_button.set_can_focus(true);
         chat_send_button.add_css_class("chat-send-button");
         chat_send_button.add_css_class("chat-action-primary");
         let placeholder_for_send = chat_placeholder.clone();
@@ -1706,7 +1714,7 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
             }
         };
 
-        let model = MainApp {
+        let mut model = MainApp {
             theme,
             buffer: initial_buffer,
             mode: mode.clone(),
@@ -1798,6 +1806,8 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
             mcp_last_update_check: Rc::new(RefCell::new(0)),
             window_visible: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             file_watcher,
+            cached_rendered_text: Rc::new(RefCell::new(None)),
+            cached_source_text: Rc::new(RefCell::new(None)),
         };
 
         // Guardar el sender en el modelo
@@ -1860,8 +1870,8 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
         // Sincronizar contenido inicial con la vista
         // Configurar TextView según el modo inicial (Normal)
         text_view_actual.set_editable(false);
-        text_view_actual.set_cursor_visible(false);
-        println!("🔧 Modo inicial configurado: Normal (editable=false, cursor_visible=false)");
+        text_view_actual.set_cursor_visible(true); // Cursor visible para navegación
+        println!("🔧 Modo inicial configurado: Normal (editable=false, cursor_visible=true)");
 
         model.sync_to_view();
         model.update_status_bar(&sender);
@@ -2156,10 +2166,8 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
                                 .find(|span| offset >= span.start && offset < span.end)
                             {
                                 gesture.set_state(gtk::EventSequenceState::Claimed);
-                                // Buscar notas con este tag
-                                sender.input(AppMsg::OpenSidebarAndFocus);
-                                sender.input(AppMsg::ToggleSearch(true));
-                                sender.input(AppMsg::SearchNotes(format!("#{}", tag_span.tag)));
+                                // Guardar nota actual y buscar tag
+                                sender.input(AppMsg::SaveAndSearchTag(tag_span.tag.clone()));
                                 return;
                             }
 
@@ -2262,7 +2270,15 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
         drop_target.connect_drop(gtk::glib::clone!(
             #[strong]
             sender,
+            #[strong]
+            mode,
             move |_target, value, _x, _y| {
+                // Solo permitir drop en modo Insert
+                let current_mode = *mode.borrow();
+                if current_mode != EditorMode::Insert {
+                    return false;
+                }
+                
                 if let Ok(text) = value.get::<String>() {
                     // Procesar el texto arrastrado (puede ser URL de imagen)
                     sender.input(AppMsg::ProcessPastedText(text));
@@ -2395,6 +2411,105 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
         model.populate_notes_list(&sender);
         *model.is_populating_list.borrow_mut() = false;
 
+        // Si hay una nota cargada inicialmente, expandir su carpeta y seleccionarla
+        if let Some(ref note) = model.current_note {
+            // Extraer solo el nombre base sin la carpeta
+            let full_name = note.name();
+            let note_name = full_name.split('/').last().unwrap_or(full_name).to_string();
+            
+            // Detectar la carpeta de la nota
+            let note_path = note.path();
+            if let Some(parent) = note_path.parent() {
+                if let Ok(relative_folder) = parent.strip_prefix(model.notes_dir.root()) {
+                    if !relative_folder.as_os_str().is_empty() {
+                        // La nota está en una carpeta, expandirla
+                        if let Some(folder_str) = relative_folder.to_str() {
+                            model.expanded_folders.insert(folder_str.to_string());
+                            
+                            // Repoblar para mostrar la carpeta expandida
+                            model.populate_notes_list(&sender);
+                            *model.is_populating_list.borrow_mut() = false;
+                            
+                            println!("📂 Carpeta '{}' expandida al inicio para mostrar nota '{}'", folder_str, note_name);
+                            
+                            // Re-seleccionar la nota después de un delay más largo
+                            let notes_list = model.notes_list.clone();
+                            let note_name_clone = note_name.clone();
+                            let folder_str_clone = folder_str.to_string();
+                            gtk::glib::timeout_add_local_once(
+                                std::time::Duration::from_millis(150),
+                                move || {
+                                    println!("🔍 Buscando nota '{}' en carpeta '{}' para seleccionar...", note_name_clone, folder_str_clone);
+                                    // Buscar y seleccionar la nota
+                                    let mut child = notes_list.first_child();
+                                    let mut found = false;
+                                    let mut current_folder: Option<String> = None;
+                                    
+                                    while let Some(widget) = child {
+                                        if let Ok(list_row) = widget.clone().downcast::<gtk::ListBoxRow>() {
+                                            // Verificar si es una carpeta para trackear en qué carpeta estamos
+                                            let is_folder = unsafe {
+                                                list_row.data::<bool>("is_folder")
+                                                    .map(|data| *data.as_ref())
+                                                    .unwrap_or(false)
+                                            };
+                                            
+                                            if is_folder {
+                                                // Actualizar la carpeta actual
+                                                current_folder = unsafe {
+                                                    list_row.data::<String>("folder_name")
+                                                        .map(|data| data.as_ref().clone())
+                                                };
+                                            } else if list_row.is_selectable() {
+                                                // Intentar obtener el nombre desde set_data primero
+                                                let note_name_from_data = unsafe {
+                                                    list_row.data::<String>("note_name")
+                                                        .map(|data| data.as_ref().clone())
+                                                };
+                                                
+                                                let name_matches = if let Some(name) = note_name_from_data {
+                                                    name == note_name_clone
+                                                } else if let Some(child_w) = list_row.child() {
+                                                    if let Ok(box_widget) = child_w.downcast::<gtk::Box>() {
+                                                        if let Some(label_widget) = box_widget.first_child().and_then(|w| w.next_sibling()) {
+                                                            if let Ok(label) = label_widget.downcast::<gtk::Label>() {
+                                                                label.text() == note_name_clone
+                                                            } else {
+                                                                false
+                                                            }
+                                                        } else {
+                                                            false
+                                                        }
+                                                    } else {
+                                                        false
+                                                    }
+                                                } else {
+                                                    false
+                                                };
+                                                
+                                                // Verificar que tanto el nombre como la carpeta coincidan
+                                                if name_matches && current_folder.as_ref() == Some(&folder_str_clone) {
+                                                    notes_list.select_row(Some(&list_row));
+                                                    found = true;
+                                                    println!("✅ Nota '{}' en carpeta '{}' seleccionada", note_name_clone, folder_str_clone);
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        child = widget.next_sibling();
+                                    }
+                                    
+                                    if !found {
+                                        println!("⚠️ No se encontró la nota '{}' en carpeta '{}' en el sidebar", note_name_clone, folder_str_clone);
+                                    }
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         // Conectar evento de cambio de selección en el ListBox
         // Deshabilitado para permitir drag-and-drop. La carga se hace con click en folder_click
         /*
@@ -2515,6 +2630,9 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
             move |gesture, _n_press, _x, y| {
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     gesture.set_state(gtk::EventSequenceState::Claimed);
+
+                    // Dar foco al notes_list para que la navegación con teclado funcione después del click
+                    notes_list.grab_focus();
 
                     // Obtener la fila bajo el click
                     if let Some(row) = notes_list.row_at_y(y as i32) {
@@ -2725,6 +2843,21 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
         ));
         widgets.notes_list.add_controller(motion_controller);
 
+        // Agregar detector de salida del mouse del sidebar para dar foco al editor
+        let leave_controller = gtk::EventControllerMotion::new();
+        let text_view_for_leave = model.text_view.clone();
+        leave_controller.connect_leave(gtk::glib::clone!(
+            #[strong]
+            text_view_for_leave,
+            move |_controller| {
+                // Cuando el mouse sale del sidebar, dar foco al editor
+                // Esto permite usar teclas de navegación (como → para cerrar sidebar)
+                // sin necesidad de hacer click primero
+                text_view_for_leave.grab_focus();
+            }
+        ));
+        widgets.notes_list.add_controller(leave_controller);
+
         // Agregar control de teclado al ListBox para navegación con j/k
         let notes_key_controller = gtk::EventControllerKey::new();
         notes_key_controller.connect_key_pressed(gtk::glib::clone!(
@@ -2745,6 +2878,39 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
                             let index = selected_row.index();
                             if let Some(next_row) = notes_list.row_at_index(index + 1) {
                                 notes_list.select_row(Some(&next_row));
+                                
+                                // Cargar la nota seleccionada
+                                // Verificar si es una carpeta
+                                let is_folder = unsafe {
+                                    next_row.data::<bool>("is_folder")
+                                        .map(|data| *data.as_ref())
+                                        .unwrap_or(false)
+                                };
+                                
+                                // Si no es una carpeta, cargar la nota
+                                if !is_folder {
+                                    // Intentar obtener el nombre de set_data (resultados de búsqueda)
+                                    let note_name = unsafe {
+                                        next_row.data::<String>("note_name")
+                                            .map(|data| data.as_ref().clone())
+                                    };
+                                    
+                                    if let Some(name) = note_name {
+                                        sender.input(AppMsg::LoadNote(name));
+                                    } else {
+                                        // Si no está en set_data, obtener desde el label (lista normal)
+                                        if let Some(child) = next_row.child() {
+                                            if let Ok(box_widget) = child.downcast::<gtk::Box>() {
+                                                if let Some(label_widget) = box_widget.first_child().and_then(|w| w.next_sibling()) {
+                                                    if let Ok(label) = label_widget.downcast::<gtk::Label>() {
+                                                        let note_name = label.text().to_string();
+                                                        sender.input(AppMsg::LoadNote(note_name));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         return gtk::glib::Propagation::Stop;
@@ -2756,6 +2922,39 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
                             if index > 0 {
                                 if let Some(prev_row) = notes_list.row_at_index(index - 1) {
                                     notes_list.select_row(Some(&prev_row));
+                                    
+                                    // Cargar la nota seleccionada
+                                    // Verificar si es una carpeta
+                                    let is_folder = unsafe {
+                                        prev_row.data::<bool>("is_folder")
+                                            .map(|data| *data.as_ref())
+                                            .unwrap_or(false)
+                                    };
+                                    
+                                    // Si no es una carpeta, cargar la nota
+                                    if !is_folder {
+                                        // Intentar obtener el nombre de set_data (resultados de búsqueda)
+                                        let note_name = unsafe {
+                                            prev_row.data::<String>("note_name")
+                                                .map(|data| data.as_ref().clone())
+                                        };
+                                        
+                                        if let Some(name) = note_name {
+                                            sender.input(AppMsg::LoadNote(name));
+                                        } else {
+                                            // Si no está en set_data, obtener desde el label (lista normal)
+                                            if let Some(child) = prev_row.child() {
+                                                if let Ok(box_widget) = child.downcast::<gtk::Box>() {
+                                                    if let Some(label_widget) = box_widget.first_child().and_then(|w| w.next_sibling()) {
+                                                        if let Ok(label) = label_widget.downcast::<gtk::Label>() {
+                                                            let note_name = label.text().to_string();
+                                                            sender.input(AppMsg::LoadNote(note_name));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -2867,13 +3066,117 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
                     self.animate_sidebar(250);
                 }
 
+                // Determinar la nota actualmente cargada y su carpeta para re-seleccionarla al abrir
+                let (current_note_name, current_folder) = if let Some(ref note) = self.current_note {
+                    let full_name = note.name();
+                    let base_name = full_name.split('/').last().unwrap_or(full_name).to_string();
+                    
+                    // Detectar la carpeta de la nota
+                    let folder = note.path()
+                        .parent()
+                        .and_then(|p| p.strip_prefix(self.notes_dir.root()).ok())
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .and_then(|p| p.to_str())
+                        .map(|s| s.to_string());
+                    
+                    (Some(base_name), folder)
+                } else {
+                    (None, None)
+                };
+
                 // Dar foco al ListBox después de un pequeño delay para que termine la animación
                 let notes_list = self.notes_list.clone();
                 gtk::glib::timeout_add_local_once(
                     std::time::Duration::from_millis(160),
                     move || {
                         notes_list.grab_focus();
-                        // Seleccionar el primer elemento si no hay nada seleccionado
+
+                        // Si hay una nota actualmente abierta, intentar seleccionarla
+                        if let Some(note_name) = current_note_name.clone() {
+                            // Buscar la fila con esa nota en la carpeta correcta
+                            let mut child = notes_list.first_child();
+                            let mut found = false;
+                            let mut current_folder_in_list: Option<String> = None;
+                            
+                            while let Some(widget) = child {
+                                if let Ok(list_row) = widget.clone().downcast::<gtk::ListBoxRow>() {
+                                    // Verificar si es una carpeta para trackear en qué carpeta estamos
+                                    let is_folder = unsafe {
+                                        list_row.data::<bool>("is_folder")
+                                            .map(|data| *data.as_ref())
+                                            .unwrap_or(false)
+                                    };
+                                    
+                                    if is_folder {
+                                        // Actualizar la carpeta actual
+                                        current_folder_in_list = unsafe {
+                                            list_row.data::<String>("folder_name")
+                                                .map(|data| data.as_ref().clone())
+                                        };
+                                    } else if list_row.is_selectable() {
+                                        // Intentar obtener el nombre desde set_data primero
+                                        let note_name_from_data = unsafe {
+                                            list_row.data::<String>("note_name")
+                                                .map(|data| data.as_ref().clone())
+                                        };
+                                        
+                                        let name_matches = if let Some(name) = note_name_from_data {
+                                            name == note_name
+                                        } else if let Some(child_w) = list_row.child() {
+                                            if let Ok(box_widget) = child_w.downcast::<gtk::Box>() {
+                                                if let Some(label_widget) = box_widget.first_child().and_then(|w| w.next_sibling()) {
+                                                    if let Ok(label) = label_widget.downcast::<gtk::Label>() {
+                                                        label.text() == note_name
+                                                    } else {
+                                                        false
+                                                    }
+                                                } else {
+                                                    false
+                                                }
+                                            } else {
+                                                false
+                                            }
+                                        } else {
+                                            false
+                                        };
+                                        
+                                        // Verificar que tanto el nombre como la carpeta coincidan
+                                        if name_matches && current_folder_in_list == current_folder {
+                                            notes_list.select_row(Some(&list_row));
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                child = widget.next_sibling();
+                            }
+                            
+                            // Si no se encontró y no hay nada seleccionado, intentar sin verificar carpeta (fallback)
+                            if !found && notes_list.selected_row().is_none() {
+                                let mut child = notes_list.first_child();
+                                while let Some(widget) = child {
+                                    if let Ok(list_row) = widget.clone().downcast::<gtk::ListBoxRow>() {
+                                        if list_row.is_selectable() {
+                                            if let Some(child_w) = list_row.child() {
+                                                if let Ok(box_widget) = child_w.downcast::<gtk::Box>() {
+                                                    if let Some(label_widget) = box_widget.first_child().and_then(|w| w.next_sibling()) {
+                                                        if let Ok(label) = label_widget.downcast::<gtk::Label>() {
+                                                            if label.text() == note_name {
+                                                                notes_list.select_row(Some(&list_row));
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    child = widget.next_sibling();
+                                }
+                            }
+                        }
+
+                        // Si no hay nada seleccionado (no había nota abierta), seleccionar primero
                         if notes_list.selected_row().is_none() {
                             if let Some(first_row) = notes_list.row_at_index(0) {
                                 notes_list.select_row(Some(&first_row));
@@ -2974,6 +3277,10 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
                 if let Err(e) = self.load_note(&name) {
                     eprintln!("Error cargando nota '{}': {}", name, e);
                 } else {
+                    // Invalidar cache al cargar nueva nota
+                    *self.cached_source_text.borrow_mut() = None;
+                    *self.cached_rendered_text.borrow_mut() = None;
+                    
                     // Sincronizar vista y actualizar UI
                     self.sync_to_view();
                     self.update_status_bar(&sender);
@@ -3082,6 +3389,8 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
 
                 // Toggle el estado de la carpeta
                 let was_expanded = self.expanded_folders.contains(&folder_name);
+                let just_expanded = !was_expanded;
+                
                 if was_expanded {
                     self.expanded_folders.remove(&folder_name);
                 } else {
@@ -3091,40 +3400,91 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
                 // Refrescar la lista para mostrar/ocultar las notas
                 self.populate_notes_list(&sender);
 
-                // Re-seleccionar la carpeta después de refrescar con un delay mayor
+                // Re-seleccionar después de refrescar
                 let notes_list = self.notes_list.clone();
                 let folder_name_clone = folder_name.clone();
                 let is_populating_clone = self.is_populating_list.clone();
+                
                 gtk::glib::timeout_add_local_once(
                     std::time::Duration::from_millis(50),
                     move || {
-                        // Primero deseleccionar todo
-                        notes_list.select_row(gtk::ListBoxRow::NONE);
+                        // Si la carpeta se acaba de expandir, contar las notas visibles
+                        let mut notes_in_folder = Vec::new();
+                        let mut folder_row_opt = None;
+                        
+                        if just_expanded {
+                            let mut child = notes_list.first_child();
+                            let mut in_target_folder = false;
+                            
+                            while let Some(widget) = child {
+                                if let Ok(row) = widget.clone().downcast::<gtk::ListBoxRow>() {
+                                    let is_folder = unsafe {
+                                        row.data::<bool>("is_folder")
+                                            .map(|data| *data.as_ref())
+                                            .unwrap_or(false)
+                                    };
 
-                        // Buscar la carpeta en la lista y seleccionarla
-                        let mut child = notes_list.first_child();
-                        while let Some(widget) = child {
-                            if let Ok(row) = widget.clone().downcast::<gtk::ListBoxRow>() {
-                                let is_folder = unsafe {
-                                    row.data::<bool>("is_folder")
-                                        .map(|data| *data.as_ref())
-                                        .unwrap_or(false)
-                                };
-
-                                if is_folder {
-                                    if let Some(row_folder) = unsafe {
-                                        row.data::<String>("folder_name")
-                                            .map(|d| d.as_ref().clone())
-                                    } {
-                                        if row_folder == folder_name_clone {
-                                            notes_list.select_row(Some(&row));
-                                            break;
+                                    if is_folder {
+                                        if let Some(row_folder) = unsafe {
+                                            row.data::<String>("folder_name")
+                                                .map(|d| d.as_ref().clone())
+                                        } {
+                                            if row_folder == folder_name_clone {
+                                                in_target_folder = true;
+                                                folder_row_opt = Some(row.clone());
+                                            } else if in_target_folder {
+                                                // Llegamos a otra carpeta, terminamos
+                                                break;
+                                            }
+                                        }
+                                    } else if in_target_folder {
+                                        // Es una nota dentro de nuestra carpeta
+                                        if let Some(child_box) = row.child() {
+                                            if let Ok(box_widget) = child_box.downcast::<gtk::Box>() {
+                                                if let Some(label_widget) = box_widget.first_child().and_then(|w| w.next_sibling()) {
+                                                    if let Ok(label) = label_widget.downcast::<gtk::Label>() {
+                                                        notes_in_folder.push((label.text().to_string(), row.clone()));
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
+                                child = widget.next_sibling();
                             }
-                            child = widget.next_sibling();
                         }
+
+                        // Si hay exactamente una nota, seleccionarla
+                        if notes_in_folder.len() == 1 {
+                            let (_, row) = &notes_in_folder[0];
+                            notes_list.select_row(Some(row));
+                            
+                            // Hacer scroll a la fila seleccionada
+                            if let Some(scrolled) = notes_list.parent()
+                                .and_then(|p| p.parent())
+                                .and_then(|p| p.downcast::<gtk::ScrolledWindow>().ok()) 
+                            {
+                                let adjustment = scrolled.vadjustment();
+                                let row_y = row.allocation().y() as f64;
+                                adjustment.set_value(row_y);
+                            }
+                        } else if let Some(folder_row) = folder_row_opt {
+                            // Si no es carpeta con una sola nota, re-seleccionar la carpeta
+                            notes_list.select_row(Some(&folder_row));
+                            
+                            // Hacer scroll a la fila seleccionada
+                            if let Some(scrolled) = notes_list.parent()
+                                .and_then(|p| p.parent())
+                                .and_then(|p| p.downcast::<gtk::ScrolledWindow>().ok()) 
+                            {
+                                let adjustment = scrolled.vadjustment();
+                                let row_y = folder_row.allocation().y() as f64;
+                                adjustment.set_value(row_y);
+                            }
+                        }
+
+                        // Restaurar el foco a la lista para permitir navegación con teclado
+                        notes_list.grab_focus();
 
                         // Desactivar flag después de re-seleccionar
                         *is_populating_clone.borrow_mut() = false;
@@ -3287,7 +3647,100 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
                     surface.queue_render();
                 }
 
-                // 6. Dar foco al editor
+                // 6. Re-seleccionar la nota actual en el sidebar si existe
+                if let Some(ref note) = self.current_note {
+                    // Extraer el nombre base y la carpeta
+                    let full_name = note.name();
+                    let note_name = full_name.split('/').last().unwrap_or(full_name).to_string();
+                    
+                    // Detectar la carpeta de la nota
+                    let note_folder = note.path()
+                        .parent()
+                        .and_then(|p| p.strip_prefix(self.notes_dir.root()).ok())
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .and_then(|p| p.to_str())
+                        .map(|s| s.to_string());
+                    
+                    let notes_list = self.notes_list.clone();
+                    
+                    println!("🔍 Programando re-selección de nota: {} en carpeta: {:?}", note_name, note_folder);
+                    
+                    gtk::glib::timeout_add_local_once(
+                        std::time::Duration::from_millis(100),
+                        move || {
+                            println!("🔎 Buscando nota '{}' en carpeta {:?} para seleccionar...", note_name, note_folder);
+                            // Buscar y seleccionar la nota
+                            let mut child = notes_list.first_child();
+                            let mut found = false;
+                            let mut count = 0;
+                            let mut current_folder: Option<String> = None;
+                            
+                            while let Some(widget) = child {
+                                count += 1;
+                                if let Ok(list_row) = widget.clone().downcast::<gtk::ListBoxRow>() {
+                                    // Verificar si es una carpeta para trackear en qué carpeta estamos
+                                    let is_folder = unsafe {
+                                        list_row.data::<bool>("is_folder")
+                                            .map(|data| *data.as_ref())
+                                            .unwrap_or(false)
+                                    };
+                                    
+                                    if is_folder {
+                                        // Actualizar la carpeta actual
+                                        current_folder = unsafe {
+                                            list_row.data::<String>("folder_name")
+                                                .map(|data| data.as_ref().clone())
+                                        };
+                                    } else if list_row.is_selectable() {
+                                        // Intentar obtener el nombre desde set_data primero
+                                        let note_name_from_data = unsafe {
+                                            list_row.data::<String>("note_name")
+                                                .map(|data| data.as_ref().clone())
+                                        };
+                                        
+                                        let name_matches = if let Some(name) = note_name_from_data {
+                                            name == note_name
+                                        } else if let Some(child_w) = list_row.child() {
+                                            if let Ok(box_widget) = child_w.downcast::<gtk::Box>() {
+                                                if let Some(label_widget) = box_widget.first_child().and_then(|w| w.next_sibling()) {
+                                                    if let Ok(label) = label_widget.downcast::<gtk::Label>() {
+                                                        label.text() == note_name
+                                                    } else {
+                                                        false
+                                                    }
+                                                } else {
+                                                    false
+                                                }
+                                            } else {
+                                                false
+                                            }
+                                        } else {
+                                            false
+                                        };
+                                        
+                                        // Verificar que tanto el nombre como la carpeta coincidan
+                                        if name_matches && current_folder == note_folder {
+                                            notes_list.select_row(Some(&list_row));
+                                            found = true;
+                                            println!("✅ Nota '{}' en carpeta {:?} seleccionada en sidebar", note_name, current_folder);
+                                            break;
+                                        }
+                                    }
+                                }
+                                child = widget.next_sibling();
+                            }
+                            
+                            println!("📊 Total de filas revisadas: {}", count);
+                            if !found {
+                                println!("⚠️ No se encontró la nota '{}' en carpeta {:?} en el sidebar", note_name, note_folder);
+                            }
+                        },
+                    );
+                } else {
+                    println!("⚠️ No hay nota actual para seleccionar");
+                }
+
+                // 7. Dar foco al editor
                 gtk::glib::idle_add_local_once(gtk::glib::clone!(
                     #[strong(rename_to = text_view)]
                     self.text_view,
@@ -3549,8 +4002,33 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
                 } else {
                     // Limpiar búsqueda y volver a mostrar todas las notas
                     self.search_entry.set_text("");
+                    
+                    // Si hay nota actual, expandir su carpeta antes de repoblar
+                    if let Some(note) = &self.current_note {
+                        let note_name = note.name();
+                        // Detectar si está en una carpeta (tiene /)
+                        if let Some(folder_end) = note_name.rfind('/') {
+                            let folder = &note_name[..folder_end];
+                            // Expandir carpeta si no está expandida
+                            if !self.expanded_folders.contains(folder) {
+                                self.expanded_folders.insert(folder.to_string());
+                                println!("📂 Carpeta expandida al salir de búsqueda: {}", folder);
+                            }
+                        }
+                    }
+                    
                     self.populate_notes_list(&sender);
                 }
+            }
+
+            AppMsg::SaveAndSearchTag(tag) => {
+                // Primero guardar la nota actual para indexar los tags nuevos
+                self.save_current_note();
+                
+                // Luego buscar el tag
+                sender.input(AppMsg::OpenSidebarAndFocus);
+                sender.input(AppMsg::ToggleSearch(true));
+                sender.input(AppMsg::SearchNotes(format!("#{}", tag)));
             }
 
             AppMsg::SearchNotes(query) => {
@@ -4570,7 +5048,98 @@ Las notas se guardan automáticamente en: ~/.local/share/notnative/notes/
 
                 // Cambiar a la página del editor en el Stack
                 self.content_stack.set_visible_child_name("editor");
-                self.text_view.grab_focus();
+                
+                // Re-seleccionar la nota actual en el sidebar si existe
+                if let Some(ref note) = self.current_note {
+                    let full_name = note.name();
+                    let note_name = full_name.split('/').last().unwrap_or(full_name).to_string();
+                    
+                    // Detectar la carpeta de la nota
+                    let note_folder = note.path()
+                        .parent()
+                        .and_then(|p| p.strip_prefix(self.notes_dir.root()).ok())
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .and_then(|p| p.to_str())
+                        .map(|s| s.to_string());
+                    
+                    let notes_list = self.notes_list.clone();
+                    let text_view = self.text_view.clone();
+                    
+                    gtk::glib::timeout_add_local_once(
+                        std::time::Duration::from_millis(100),
+                        move || {
+                            // Re-seleccionar la nota en el sidebar
+                            let mut child = notes_list.first_child();
+                            let mut found = false;
+                            let mut current_folder: Option<String> = None;
+                            
+                            while let Some(widget) = child {
+                                if let Ok(list_row) = widget.clone().downcast::<gtk::ListBoxRow>() {
+                                    let is_folder = unsafe {
+                                        list_row.data::<bool>("is_folder")
+                                            .map(|data| *data.as_ref())
+                                            .unwrap_or(false)
+                                    };
+                                    
+                                    if is_folder {
+                                        current_folder = unsafe {
+                                            list_row.data::<String>("folder_name")
+                                                .map(|data| data.as_ref().clone())
+                                        };
+                                    } else if list_row.is_selectable() {
+                                        let note_name_from_data = unsafe {
+                                            list_row.data::<String>("note_name")
+                                                .map(|data| data.as_ref().clone())
+                                        };
+                                        
+                                        let name_matches = if let Some(name) = note_name_from_data {
+                                            name == note_name
+                                        } else if let Some(child_w) = list_row.child() {
+                                            if let Ok(box_widget) = child_w.downcast::<gtk::Box>() {
+                                                if let Some(label_widget) = box_widget.first_child().and_then(|w| w.next_sibling()) {
+                                                    if let Ok(label) = label_widget.downcast::<gtk::Label>() {
+                                                        label.text() == note_name
+                                                    } else {
+                                                        false
+                                                    }
+                                                } else {
+                                                    false
+                                                }
+                                            } else {
+                                                false
+                                            }
+                                        } else {
+                                            false
+                                        };
+                                        
+                                        if name_matches && current_folder == note_folder {
+                                            notes_list.select_row(Some(&list_row));
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                child = widget.next_sibling();
+                            }
+                            
+                            if !found {
+                                println!("⚠️ No se encontró la nota '{}' en carpeta {:?} en el sidebar al salir del chat", note_name, note_folder);
+                            }
+                            
+                            // Dar foco al editor
+                            text_view.grab_focus();
+                        },
+                    );
+                } else {
+                    // Si no hay nota, solo dar foco al editor
+                    let text_view = self.text_view.clone();
+                    gtk::glib::timeout_add_local_once(
+                        std::time::Duration::from_millis(100),
+                        move || {
+                            text_view.grab_focus();
+                        },
+                    );
+                }
             }
 
             AppMsg::SendChatMessage(message) => {
@@ -5496,7 +6065,20 @@ impl MainApp {
                     match new_mode {
                         EditorMode::Normal => {
                             self.text_view.set_editable(false);
-                            self.text_view.set_cursor_visible(false);
+                            self.text_view.set_cursor_visible(true); // Cursor visible para ver navegación
+                            
+                            // Al cambiar a modo Normal, ajustar el cursor para que esté dentro
+                            // del rango del texto limpio (sin markdown)
+                            if self.markdown_enabled {
+                                let buffer_text = self.buffer.to_string();
+                                let clean_text = self.render_clean_markdown(&buffer_text);
+                                let clean_len = clean_text.chars().count();
+                                
+                                // Si el cursor está más allá del texto limpio, ajustarlo
+                                if self.cursor_position > clean_len {
+                                    self.cursor_position = clean_len;
+                                }
+                            }
                         }
                         EditorMode::Insert => {
                             self.text_view.set_editable(true);
@@ -5811,25 +6393,36 @@ impl MainApp {
         let buffer_text = self.buffer.to_string();
         let current_mode = *self.mode.borrow();
 
-        // En modo Normal, mostrar texto limpio (sin símbolos markdown)
-        // En modo Insert, mostrar texto crudo con todos los símbolos
-        let display_text = if current_mode == EditorMode::Normal && self.markdown_enabled {
-            self.render_clean_markdown(&buffer_text)
+        // Verificar si el texto fuente cambió (antes de cachear)
+        let text_changed = if current_mode == EditorMode::Normal && self.markdown_enabled {
+            // En Normal mode, comparar con el cache del texto fuente
+            let cached_source = self.cached_source_text.borrow();
+            cached_source.as_ref() != Some(&buffer_text)
         } else {
+            // En Insert mode, siempre actualizar
+            true
+        };
+
+        // En modo Normal, usar cache si el texto fuente no cambió
+        let display_text = if current_mode == EditorMode::Normal && self.markdown_enabled {
+            if !text_changed {
+                // Reusar el renderizado cacheado
+                self.cached_rendered_text.borrow().clone().unwrap()
+            } else {
+                // Texto fuente cambió, renderizar y cachear
+                let rendered = self.render_clean_markdown(&buffer_text);
+                *self.cached_source_text.borrow_mut() = Some(buffer_text.clone());
+                *self.cached_rendered_text.borrow_mut() = Some(rendered.clone());
+                rendered
+            }
+        } else {
+            // En Insert mode, limpiar el cache
+            *self.cached_source_text.borrow_mut() = None;
+            *self.cached_rendered_text.borrow_mut() = None;
             buffer_text.clone()
         };
 
-        // Solo actualizar si el texto es diferente
-        let current_text = self
-            .text_buffer
-            .text(
-                &self.text_buffer.start_iter(),
-                &self.text_buffer.end_iter(),
-                false,
-            )
-            .to_string();
-
-        if current_text != display_text {
+        if text_changed {
             // Calcular posición del cursor en el texto mostrado
             let cursor_offset = if current_mode == EditorMode::Normal && self.markdown_enabled {
                 // Mapear posición del buffer original al texto limpio
@@ -5845,15 +6438,18 @@ impl MainApp {
                 self.buffer.len_chars()
             );
             println!(
-                "   Texto actual len: {}, texto nuevo len: {}",
-                current_text.chars().count(),
-                display_text.chars().count()
+                "   Texto renderizado len: {}, texto fuente cambió: {}",
+                display_text.chars().count(),
+                text_changed
             );
 
             // Mostrar contexto alrededor del cursor
             let chars_vec: Vec<char> = display_text.chars().collect();
             let start = cursor_offset.saturating_sub(10);
             let end = (cursor_offset + 10).min(chars_vec.len());
+            
+            // Asegurar que cursor_offset está dentro del rango válido
+            let safe_cursor_offset = cursor_offset.min(chars_vec.len());
             let context: String = chars_vec[start..end].iter().collect();
             println!("   Contexto: {:?} [cursor aquí]", context);
 
@@ -5869,51 +6465,77 @@ impl MainApp {
                 .insert(&mut self.text_buffer.start_iter(), &display_text);
 
             // Restaurar cursor ANTES de terminar la acción de usuario
+            // Usar safe_cursor_offset para evitar panic
             let mut iter = self.text_buffer.start_iter();
-            iter.set_offset(cursor_offset as i32);
+            iter.set_offset(safe_cursor_offset as i32);
             self.text_buffer.place_cursor(&iter);
 
             self.text_buffer.end_user_action();
-
-            // Hacer scroll para que el cursor sea visible
-            let text_view = self.text_view.clone();
-            let final_offset = cursor_offset as i32;
-            gtk::glib::idle_add_local_once(move || {
-                let buffer = text_view.buffer();
-                let mut cursor_iter = buffer.iter_at_offset(final_offset);
-                text_view.scroll_to_iter(&mut cursor_iter, 0.0, false, 0.0, 0.0);
-            });
 
             // Aplicar estilos markdown DESPUÉS de terminar la acción de usuario
             // Solo en modo Normal (en Insert mode no aplicamos estilos)
             if current_mode == EditorMode::Normal && self.markdown_enabled {
                 self.apply_markdown_styles_to_clean_text(&display_text);
             }
+
+            // Hacer scroll para mantener el cursor visible
+            // GTK necesita tiempo para recalcular las alturas de línea después del buffer replacement
+            let text_view = self.text_view.clone();
+            
+            // Programar múltiples intentos de scroll para asegurar que funcione
+            for delay_ms in [10, 50, 150] {
+                let text_view_clone = text_view.clone();
+                gtk::glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(delay_ms),
+                    move || {
+                        let buffer = text_view_clone.buffer();
+                        let insert_mark = buffer.get_insert();
+                        // Scroll simple sin alineación forzada, solo asegurar visibilidad
+                        text_view_clone.scroll_mark_onscreen(&insert_mark);
+                    }
+                );
+            }
         } else {
-            // Aunque el texto no cambió, actualizar la posición del cursor
+            // Aunque el texto no cambió, simplemente actualizar la posición del cursor
+            println!("📌 sync_to_view: Solo actualizando cursor (texto sin cambios)");
             let cursor_offset = if current_mode == EditorMode::Normal && self.markdown_enabled {
                 // Mapear posición del buffer original al texto limpio
                 self.map_buffer_pos_to_display(&buffer_text, self.cursor_position)
             } else {
                 self.cursor_position.min(self.buffer.len_chars())
             };
+            println!("   Cursor offset calculado: {}", cursor_offset);
             let mut iter = self.text_buffer.start_iter();
             iter.set_offset(cursor_offset as i32);
             self.text_buffer.place_cursor(&iter);
-
-            // Hacer scroll para que el cursor sea visible
+            
+            // Hacer scroll para mantener el cursor visible
             let text_view = self.text_view.clone();
-            let final_offset = cursor_offset as i32;
             gtk::glib::idle_add_local_once(move || {
                 let buffer = text_view.buffer();
-                let mut cursor_iter = buffer.iter_at_offset(final_offset);
-                text_view.scroll_to_iter(&mut cursor_iter, 0.0, false, 0.0, 0.0);
+                let insert_mark = buffer.get_insert();
+                // scroll_mark_onscreen hace scroll mínimo para mantener visible
+                text_view.scroll_mark_onscreen(&insert_mark);
             });
         }
 
         // Reiniciar el flag al terminar toda la sincronización
         *self.is_syncing_to_gtk.borrow_mut() = false;
         println!("sync_to_view completado. Reiniciando flag is_syncing_to_gtk");
+    }
+
+    /// Hace scroll para que el cursor sea visible (NO USAR - scroll se hace en sync_to_view)
+    #[allow(dead_code)]
+    fn scroll_to_cursor(&self) {
+        let text_view_clone = self.text_view.clone();
+        // Usar timeout en lugar de idle para dar más tiempo a GTK a procesar los cambios
+        gtk::glib::timeout_add_local_once(
+            std::time::Duration::from_millis(10),
+            move || {
+                let cursor_mark = text_view_clone.buffer().get_insert();
+                text_view_clone.scroll_mark_onscreen(&cursor_mark);
+            }
+        );
     }
 
     /// Renderiza el texto markdown sin los símbolos de formato
@@ -6000,12 +6622,12 @@ impl MainApp {
                         }
                     }
 
-                    println!(
-                        "DEBUG: Detectado '-' al inicio de línea. Posición en result: {}. at_line_start: {}, indent_spaces: {}",
-                        result.len(),
-                        at_line_start,
-                        indent_spaces
-                    );
+                    // println!(
+                    //     "DEBUG: Detectado '-' al inicio de línea. Posición en result: {}. at_line_start: {}, indent_spaces: {}",
+                    //     result.len(),
+                    //     at_line_start,
+                    //     indent_spaces
+                    // );
 
                     // Verificar si es un TODO
                     if lookahead.len() >= 5
@@ -6063,10 +6685,10 @@ impl MainApp {
                         at_line_start = false; // Ya no estamos al inicio de línea
                     } else {
                         // No es ni lista ni TODO, es solo un guión
-                        println!(
-                            "DEBUG: No se detectó TODO ni lista. Lookahead: {:?}",
-                            lookahead
-                        );
+                        // println!(
+                        //     "DEBUG: No se detectó TODO ni lista. Lookahead: {:?}",
+                        //     lookahead
+                        // );
                         result.push(ch);
                         at_line_start = false; // Ya no estamos al inicio de línea
                     }
@@ -6109,10 +6731,10 @@ impl MainApp {
 
                         // Insertar marcador especial con la ruta
                         let marker = format!("[IMG:{}]", img_src);
-                        println!(
-                            "DEBUG render_clean_markdown: Insertando marcador: {}",
-                            marker
-                        );
+                        // println!(
+                        //     "DEBUG render_clean_markdown: Insertando marcador: {}",
+                        //     marker
+                        // );
                         result.push_str(&marker);
                     } else {
                         // No era una imagen válida
@@ -6205,10 +6827,10 @@ impl MainApp {
             }
         }
 
-        println!(
-            "DEBUG render_clean_markdown: Salida: {:?}",
-            result.lines().take(3).collect::<Vec<_>>()
-        );
+        // println!(
+        //     "DEBUG render_clean_markdown: Salida: {:?}",
+        //     result.lines().take(3).collect::<Vec<_>>()
+        // );
         result
     }
 
@@ -7168,6 +7790,43 @@ impl MainApp {
                 clean_pos += 1;
             }
             orig_pos += 1;
+        }
+
+        // IMPORTANTE: Detectar también tags en formato YAML de lista (frontmatter con • o -)
+        // Buscar líneas como:
+        //   • tag
+        //   - tag
+        // Que son típicas del formato visual del frontmatter parseado
+        let trimmed_line = clean_line.trim_start();
+
+        // Detectar "• tag" o "- tag" (lista de tags en frontmatter)
+        if trimmed_line.starts_with("• ") || trimmed_line.starts_with("- ") {
+            let tag_text = if trimmed_line.starts_with("• ") {
+                trimmed_line[3..].trim() // Después de "• " (bullet es 3 bytes UTF-8)
+            } else {
+                trimmed_line[2..].trim() // Después de "- "
+            };
+
+            // Verificar que sea solo una palabra (tag válido, sin espacios)
+            if !tag_text.is_empty() && !tag_text.contains(char::is_whitespace) {
+                // Calcular offset del tag dentro de la línea
+                let bullet_pos = clean_line.find(trimmed_line).unwrap_or(0);
+                let tag_start_in_line = if trimmed_line.starts_with("• ") {
+                    bullet_pos + 3 // Después de "• " (3 bytes UTF-8)
+                } else {
+                    bullet_pos + 2 // Después de "- "
+                };
+                let tag_end_in_line = tag_start_in_line + tag_text.len();
+
+                let start_offset = line_offset + tag_start_in_line as i32;
+                let end_offset = line_offset + tag_end_in_line as i32;
+
+                self.tag_spans.borrow_mut().push(TagSpan {
+                    start: start_offset,
+                    end: end_offset,
+                    tag: tag_text.to_string(),
+                });
+            }
         }
     }
 
@@ -8224,14 +8883,21 @@ impl MainApp {
                 // Limpiar imágenes no referenciadas
                 self.cleanup_unused_images(&old_content, &new_content);
 
+                // Extraer nombre sin carpeta para búsqueda en BD
+                // note.name() puede ser "Docs VS/NOTA" o "NOTA"
+                let note_name_only = note.name()
+                    .split('/')
+                    .last()
+                    .unwrap_or(note.name());
+
                 // Actualizar índice en base de datos
-                if let Err(e) = self.notes_db.update_note(note.name(), &new_content) {
+                if let Err(e) = self.notes_db.update_note(note_name_only, &new_content) {
                     eprintln!("Error actualizando índice: {}", e);
                 } else {
                     println!("Índice actualizado");
 
                     // Actualizar tags
-                    if let Ok(Some(note_meta)) = self.notes_db.get_note(note.name()) {
+                    if let Ok(Some(note_meta)) = self.notes_db.get_note(note_name_only) {
                         // Obtener tags actuales del contenido (frontmatter + inline #tags)
                         let new_tags = extract_all_tags(&new_content);
 
@@ -8385,32 +9051,45 @@ impl MainApp {
             return Ok(());
         }
 
-        // Contenido inicial vacío para nueva nota
-        let initial_content = format!("# {}\n\n", name.split('/').last().unwrap_or(name));
-
-        let note = if name.contains('/') {
-            // Si contiene '/', separar carpeta y nombre
+        // Separar carpeta y nombre
+        let (folder, base_name) = if name.contains('/') {
             let parts: Vec<&str> = name.rsplitn(2, '/').collect();
-            let note_name = parts[0];
-            let folder = parts[1];
+            (Some(parts[1]), parts[0])
+        } else {
+            (None, name)
+        };
+
+        // Generar nombre único si ya existe
+        let unique_name = self.generate_unique_note_name(folder, base_name);
+        let final_name = if let Some(f) = folder {
+            format!("{}/{}", f, unique_name)
+        } else {
+            unique_name.clone()
+        };
+
+        // Contenido inicial vacío para nueva nota
+        let initial_content = format!("# {}\n\n", unique_name);
+
+        let note = if let Some(folder_path) = folder {
+            // Crear en carpeta
             self.notes_dir
-                .create_note_in_folder(folder, note_name, &initial_content)?
+                .create_note_in_folder(folder_path, &unique_name, &initial_content)?
         } else {
             // Crear en la raíz
-            self.notes_dir.create_note(name, &initial_content)?
+            self.notes_dir.create_note(&unique_name, &initial_content)?
         };
 
         // Indexar en base de datos
-        let folder = self.notes_dir.relative_folder(note.path());
+        let folder_for_db = self.notes_dir.relative_folder(note.path());
         if let Err(e) = self.notes_db.index_note(
             note.name(),
             note.path().to_str().unwrap_or(""),
             &initial_content,
-            folder.as_deref(),
+            folder_for_db.as_deref(),
         ) {
             eprintln!("Error indexando nueva nota: {}", e);
         } else {
-            println!("Nueva nota indexada: {}", name);
+            println!("Nueva nota indexada: {}", final_name);
         }
 
         // Cargar la nueva nota en el buffer
@@ -8419,8 +9098,41 @@ impl MainApp {
         self.current_note = Some(note.clone());
         self.has_unsaved_changes = false;
 
-        println!("Nueva nota creada: {}", name);
+        if unique_name != base_name {
+            println!("Nueva nota creada: {} (renombrada desde '{}')", final_name, name);
+        } else {
+            println!("Nueva nota creada: {}", final_name);
+        }
         Ok(())
+    }
+    
+    /// Genera un nombre único para una nota verificando si ya existe
+    /// y añadiendo (1), (2), etc. si es necesario
+    fn generate_unique_note_name(&self, folder: Option<&str>, base_name: &str) -> String {
+        let notes_root = self.notes_dir.root();
+        let target_dir = if let Some(f) = folder {
+            notes_root.join(f)
+        } else {
+            notes_root.to_path_buf()
+        };
+        
+        // Verificar si el nombre base ya existe
+        let base_path = target_dir.join(format!("{}.md", base_name));
+        if !base_path.exists() {
+            return base_name.to_string();
+        }
+        
+        // Si existe, buscar el primer número disponible
+        for i in 1..1000 {
+            let new_name = format!("{} ({})", base_name, i);
+            let new_path = target_dir.join(format!("{}.md", new_name));
+            if !new_path.exists() {
+                return new_name;
+            }
+        }
+        
+        // Si llegamos aquí (muy improbable), usar timestamp
+        format!("{} ({})", base_name, chrono::Local::now().timestamp())
     }
 
     /// Configura drag and drop para una fila específica del sidebar
@@ -8551,8 +9263,8 @@ impl MainApp {
         // Guardar la nota actual para re-seleccionarla después
         let current_note_name = self.current_note.as_ref().map(|n| n.name().to_string());
 
-        // Deseleccionar cualquier fila actual
-        self.notes_list.select_row(gtk::ListBoxRow::NONE);
+        // NO deseleccionar aquí para evitar scroll no deseado
+        // El código al final re-seleccionará la nota actual
 
         // Limpiar lista actual (solo ListBoxRows, no el popover)
         let mut child = self.notes_list.first_child();
@@ -8979,6 +9691,25 @@ impl MainApp {
                                     if let Ok(label) = label_widget.downcast::<gtk::Label>() {
                                         if label.text() == note_name {
                                             self.notes_list.select_row(Some(&list_row));
+                                            
+                                            // Hacer scroll hasta la nota seleccionada
+                                            let scrolled_window = self.notes_list
+                                                .parent()
+                                                .and_then(|p| p.parent())
+                                                .and_then(|p| p.downcast::<gtk::ScrolledWindow>().ok());
+                                            
+                                            if let Some(sw) = scrolled_window {
+                                                let vadj = sw.vadjustment();
+                                                // Obtener posición de la fila
+                                                let allocation = list_row.allocation();
+                                                let row_y = allocation.y() as f64;
+                                                let page_size = vadj.page_size();
+                                                
+                                                // Centrar la fila en la vista
+                                                let target_value = (row_y - page_size / 2.0).max(0.0);
+                                                vadj.set_value(target_value);
+                                            }
+                                            
                                             break;
                                         }
                                     }
@@ -8991,8 +9722,8 @@ impl MainApp {
             }
         }
 
-        // NO desactivar flag aquí - se hace con timeout en ToggleFolder
-        // o manualmente en otros contextos
+        // Desactivar flag después de repoblar la lista
+        *self.is_populating_list.borrow_mut() = false;
     }
 
     /// Realiza búsqueda FTS5 y muestra resultados en el sidebar
@@ -11379,7 +12110,7 @@ impl MainApp {
             .transient_for(&self.main_window)
             .modal(true)
             .program_name("NotNative")
-            .version("0.1.6")
+            .version("0.1.7")
             .comments(&i18n.t("app_description"))
             .website("https://github.com/k4ditano/notnative-app")
             .website_label(&i18n.t("website"))

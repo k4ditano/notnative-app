@@ -616,11 +616,15 @@ impl MCPToolExecutor {
             .ok_or_else(|| anyhow::anyhow!("Nota no encontrada"))?;
         let old_path = note.path();
 
-        let new_path = if let Some(parent) = old_path.parent() {
-            parent.join(new_name)
-        } else {
-            PathBuf::from(new_name)
-        };
+        // Obtener el directorio donde está la nota
+        let parent_dir = old_path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("No se pudo obtener el directorio padre"))?;
+
+        // Generar nombre único si ya existe
+        let unique_new_name = self.generate_unique_filename(parent_dir, new_name);
+        
+        let new_path = parent_dir.join(&unique_new_name);
 
         std::fs::rename(&old_path, &new_path)?;
 
@@ -628,12 +632,15 @@ impl MCPToolExecutor {
         let content = std::fs::read_to_string(&new_path)?;
         let folder = old_path
             .parent()
-            .and_then(|p| p.file_name())
-            .and_then(|f| f.to_str())
-            .filter(|f| *f != self.notes_dir.root());
+            .and_then(|p| p.strip_prefix(self.notes_dir.root()).ok())
+            .filter(|p| !p.as_os_str().is_empty())
+            .and_then(|p| p.to_str());
+
+        // Extraer nombre sin extensión para la BD
+        let db_name = unique_new_name.trim_end_matches(".md");
 
         if let Err(e) = self.notes_db.borrow().index_note(
-            new_name.trim_end_matches(".md"),
+            db_name,
             new_path.to_str().unwrap_or(""),
             &content,
             folder,
@@ -641,11 +648,51 @@ impl MCPToolExecutor {
             eprintln!("⚠️ Error actualizando BD después de renombrar nota: {}", e);
         }
 
+        let result_message = if unique_new_name != new_name {
+            format!(
+                "Nota renombrada de '{}' a '{}' (el nombre '{}' ya existía)",
+                old_name, db_name, new_name.trim_end_matches(".md")
+            )
+        } else {
+            format!("Nota renombrada de '{}' a '{}'", old_name, db_name)
+        };
+
         Ok(MCPToolResult::success(json!({
-            "message": format!("Nota renombrada de '{}' a '{}'", old_name, new_name),
+            "message": result_message,
             "old_name": old_name,
-            "new_name": new_name
+            "new_name": db_name
         })))
+    }
+    
+    /// Genera un nombre de archivo único verificando si ya existe
+    /// y añadiendo (1), (2), etc. si es necesario
+    fn generate_unique_filename(&self, dir: &std::path::Path, base_name: &str) -> String {
+        // Asegurar que tiene extensión .md
+        let with_ext = if base_name.ends_with(".md") {
+            base_name.to_string()
+        } else {
+            format!("{}.md", base_name)
+        };
+        
+        let base_path = dir.join(&with_ext);
+        if !base_path.exists() {
+            return with_ext;
+        }
+        
+        // Extraer nombre sin extensión
+        let name_without_ext = base_name.trim_end_matches(".md");
+        
+        // Si existe, buscar el primer número disponible
+        for i in 1..1000 {
+            let new_name = format!("{} ({}).md", name_without_ext, i);
+            let new_path = dir.join(&new_name);
+            if !new_path.exists() {
+                return new_name;
+            }
+        }
+        
+        // Si llegamos aquí (muy improbable), usar timestamp
+        format!("{} ({}).md", name_without_ext, chrono::Local::now().timestamp())
     }
 
     fn duplicate_note(&self, name: &str, new_name: &str) -> Result<MCPToolResult> {

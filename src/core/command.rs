@@ -80,7 +80,7 @@ impl CommandParser {
                 "r" => EditorAction::Redo,
                 "c" => EditorAction::Copy,
                 "x" => EditorAction::Cut,
-                "v" => EditorAction::Paste,
+                // Ctrl+V deshabilitado en modo Normal (solo Insert)
                 _ => EditorAction::None,
             };
         }
