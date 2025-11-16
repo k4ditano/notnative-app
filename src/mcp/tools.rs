@@ -62,6 +62,29 @@ pub enum MCPToolCall {
         limit: Option<i32>,
     },
 
+    // === Búsqueda Semántica ===
+    SemanticSearch {
+        query: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        limit: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        min_similarity: Option<f32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        folder: Option<String>,
+    },
+    FindSimilarNotes {
+        note_path: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        limit: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        min_similarity: Option<f32>,
+    },
+    GetEmbeddingStats,
+    IndexNote {
+        note_path: String,
+    },
+    ReindexAllNotes,
+
     // === Organización ===
     MoveNote {
         name: String,
@@ -145,6 +168,14 @@ pub enum MCPToolCall {
         #[serde(skip_serializing_if = "Option::is_none")]
         max_depth: Option<i32>,
     },
+    FindEmptyItems {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        item_type: Option<String>, // "notes", "folders", "all" (default: "all")
+    },
+    GetSystemDateTime {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        _dummy: Option<()>,
+    },
 
     // === Transformaciones de Contenido ===
     GenerateTableOfContents {
@@ -171,24 +202,24 @@ pub enum MCPToolCall {
         split_by: String, // "heading", "paragraph", "separator"
     },
 
-    // === Control de UI ===
-    OpenNote {
-        name: String,
-    },
-    ShowNotification {
-        message: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        level: Option<String>, // "info", "warning", "error", "success"
-    },
-    HighlightNote {
-        name: String,
-    },
-    ToggleSidebar,
-    SwitchMode {
-        mode: String, // "normal", "insert", "chat"
-    },
-    RefreshSidebar,
-    FocusSearch,
+    // === Control de UI (DESHABILITADAS - pendiente de implementar) ===
+    // OpenNote {
+    //     name: String,
+    // },
+    // ShowNotification {
+    //     message: String,
+    //     #[serde(skip_serializing_if = "Option::is_none")]
+    //     level: Option<String>, // "info", "warning", "error", "success"
+    // },
+    // HighlightNote {
+    //     name: String,
+    // },
+    // ToggleSidebar,
+    // SwitchMode {
+    //     mode: String, // "normal", "insert", "chat"
+    // },
+    // RefreshSidebar,
+    // FocusSearch,
 
     // === Exportación e Importación ===
     ExportNote {

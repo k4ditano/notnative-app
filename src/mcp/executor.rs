@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use crate::core::{NotesDatabase, NotesDirectory};
+use crate::core::{NotesConfig, NotesDatabase, NotesDirectory};
 use crate::i18n::I18n;
 use crate::mcp::tools::{MCPToolCall, MCPToolResult};
 
@@ -13,6 +13,7 @@ use crate::mcp::tools::{MCPToolCall, MCPToolResult};
 pub struct MCPToolExecutor {
     notes_dir: NotesDirectory,
     notes_db: Rc<RefCell<NotesDatabase>>,
+    notes_config: Rc<RefCell<NotesConfig>>,
     i18n: Rc<RefCell<I18n>>,
 }
 
@@ -20,11 +21,13 @@ impl MCPToolExecutor {
     pub fn new(
         notes_dir: NotesDirectory,
         notes_db: Rc<RefCell<NotesDatabase>>,
+        notes_config: Rc<RefCell<NotesConfig>>,
         i18n: Rc<RefCell<I18n>>,
     ) -> Self {
         Self {
             notes_dir,
             notes_db,
+            notes_config,
             i18n,
         }
     }
@@ -33,58 +36,34 @@ impl MCPToolExecutor {
     pub fn execute(&self, tool: MCPToolCall) -> Result<MCPToolResult> {
         match tool {
             // === Gestión de notas ===
-            MCPToolCall::CreateNote { name, content, folder } => {
-                self.create_note(&name, &content, folder.as_deref())
-            }
-            MCPToolCall::ReadNote { name } => {
-                self.read_note(&name)
-            }
-            MCPToolCall::UpdateNote { name, content } => {
-                self.update_note(&name, &content)
-            }
-            MCPToolCall::AppendToNote { name, content } => {
-                self.append_to_note(&name, &content)
-            }
-            MCPToolCall::DeleteNote { name } => {
-                self.delete_note(&name)
-            }
-            MCPToolCall::ListNotes { folder } => {
-                self.list_notes(folder.as_deref())
-            }
+            MCPToolCall::CreateNote {
+                name,
+                content,
+                folder,
+            } => self.create_note(&name, &content, folder.as_deref()),
+            MCPToolCall::ReadNote { name } => self.read_note(&name),
+            MCPToolCall::UpdateNote { name, content } => self.update_note(&name, &content),
+            MCPToolCall::AppendToNote { name, content } => self.append_to_note(&name, &content),
+            MCPToolCall::DeleteNote { name } => self.delete_note(&name),
+            MCPToolCall::ListNotes { folder } => self.list_notes(folder.as_deref()),
             MCPToolCall::RenameNote { old_name, new_name } => {
                 self.rename_note(&old_name, &new_name)
             }
-            MCPToolCall::DuplicateNote { name, new_name } => {
-                self.duplicate_note(&name, &new_name)
-            }
+            MCPToolCall::DuplicateNote { name, new_name } => self.duplicate_note(&name, &new_name),
 
             // === Búsqueda ===
-            MCPToolCall::SearchNotes { query } => {
-                self.search_notes(&query)
-            }
-            MCPToolCall::GetNotesWithTag { tag } => {
-                self.get_notes_with_tag(&tag)
-            }
-            MCPToolCall::FuzzySearch { query, limit } => {
-                self.fuzzy_search(&query, limit)
-            }
-            MCPToolCall::GetRecentNotes { limit } => {
-                self.get_recent_notes(limit)
-            }
+            MCPToolCall::SearchNotes { query } => self.search_notes(&query),
+            MCPToolCall::GetNotesWithTag { tag } => self.get_notes_with_tag(&tag),
+            MCPToolCall::FuzzySearch { query, limit } => self.fuzzy_search(&query, limit),
+            MCPToolCall::GetRecentNotes { limit } => self.get_recent_notes(limit),
 
             // === Análisis ===
-            MCPToolCall::AnalyzeNoteStructure { name } => {
-                self.analyze_note_structure(&name)
-            }
-            MCPToolCall::GetWordCount { name } => {
-                self.get_word_count(&name)
-            }
+            MCPToolCall::AnalyzeNoteStructure { name } => self.analyze_note_structure(&name),
+            MCPToolCall::GetWordCount { name } => self.get_word_count(&name),
             MCPToolCall::SuggestRelatedNotes { name, limit } => {
                 self.suggest_related_notes(&name, limit)
             }
-            MCPToolCall::GetAllTags { .. } => {
-                self.get_all_tags()
-            }
+            MCPToolCall::GetAllTags { .. } => self.get_all_tags(),
 
             // === Transformaciones ===
             MCPToolCall::GenerateTableOfContents { name, max_level } => {
@@ -93,9 +72,10 @@ impl MCPToolExecutor {
             MCPToolCall::ExtractCodeBlocks { name, language } => {
                 self.extract_code_blocks(&name, language.as_deref())
             }
-            MCPToolCall::MergeNotes { note_names, output_name } => {
-                self.merge_notes(&note_names, &output_name)
-            }
+            MCPToolCall::MergeNotes {
+                note_names,
+                output_name,
+            } => self.merge_notes(&note_names, &output_name),
 
             // === Organización ===
             MCPToolCall::CreateFolder { name, parent } => {
@@ -110,24 +90,16 @@ impl MCPToolExecutor {
             MCPToolCall::MoveFolder { name, new_parent } => {
                 self.move_folder(&name, new_parent.as_deref())
             }
-            MCPToolCall::ListFolders { .. } => {
-                self.list_folders()
+            MCPToolCall::ListFolders { .. } => self.list_folders(),
+            MCPToolCall::FindEmptyItems { item_type } => {
+                self.find_empty_items(item_type.as_deref())
             }
-            MCPToolCall::MoveNote { name, folder } => {
-                self.move_note(&name, &folder)
-            }
-            MCPToolCall::AddTag { note, tag } => {
-                self.add_tag(&note, &tag)
-            }
-            MCPToolCall::RemoveTag { note, tag } => {
-                self.remove_tag(&note, &tag)
-            }
-            MCPToolCall::CreateTag { tag } => {
-                self.create_tag(&tag)
-            }
-            MCPToolCall::AddMultipleTags { note, tags } => {
-                self.add_multiple_tags(&note, &tags)
-            }
+            MCPToolCall::GetSystemDateTime { .. } => self.get_system_datetime(),
+            MCPToolCall::MoveNote { name, folder } => self.move_note(&name, &folder),
+            MCPToolCall::AddTag { note, tag } => self.add_tag(&note, &tag),
+            MCPToolCall::RemoveTag { note, tag } => self.remove_tag(&note, &tag),
+            MCPToolCall::CreateTag { tag } => self.create_tag(&tag),
+            MCPToolCall::AddMultipleTags { note, tags } => self.add_multiple_tags(&note, &tags),
             MCPToolCall::AnalyzeAndTagNote { name, max_tags } => {
                 self.analyze_and_tag_note(&name, max_tags.unwrap_or(5))
             }
@@ -136,34 +108,48 @@ impl MCPToolExecutor {
             MCPToolCall::CreateDailyNote { template } => {
                 self.create_daily_note(template.as_deref())
             }
-            MCPToolCall::FindAndReplace { find, replace, note_names } => {
-                self.find_and_replace(&find, &replace, note_names.as_deref())
-            }
+            MCPToolCall::FindAndReplace {
+                find,
+                replace,
+                note_names,
+            } => self.find_and_replace(&find, &replace, note_names.as_deref()),
 
             // === Sistema ===
-            MCPToolCall::GetAppInfo => {
-                self.get_app_info()
-            }
-            MCPToolCall::GetWorkspacePath => {
-                self.get_workspace_path()
-            }
+            MCPToolCall::GetAppInfo => self.get_app_info(),
+            MCPToolCall::GetWorkspacePath => self.get_workspace_path(),
 
-            // === UI - Estos necesitan comunicación con la app ===
-            MCPToolCall::OpenNote { .. }
-            | MCPToolCall::ShowNotification { .. }
-            | MCPToolCall::HighlightNote { .. }
-            | MCPToolCall::ToggleSidebar
-            | MCPToolCall::SwitchMode { .. }
-            | MCPToolCall::RefreshSidebar
-            | MCPToolCall::FocusSearch => {
-                Ok(MCPToolResult::error(
-                    "Herramienta de UI requiere canal de comunicación con la app (pendiente de implementar)".to_string()
-                ))
-            }
+            // === Semantic Search ===
+            MCPToolCall::SemanticSearch {
+                query,
+                limit,
+                min_similarity,
+                folder,
+            } => self.semantic_search(query, limit, min_similarity, folder),
+            MCPToolCall::FindSimilarNotes {
+                note_path,
+                limit,
+                min_similarity,
+            } => self.find_similar_notes(note_path, limit, min_similarity),
+            MCPToolCall::GetEmbeddingStats => self.get_embedding_stats(),
+            MCPToolCall::IndexNote { note_path } => self.index_note(note_path),
+            MCPToolCall::ReindexAllNotes => self.reindex_all_notes(),
+
+            // === UI - DESHABILITADAS (pendiente de implementar) ===
+            // MCPToolCall::OpenNote { .. }
+            // | MCPToolCall::ShowNotification { .. }
+            // | MCPToolCall::HighlightNote { .. }
+            // | MCPToolCall::ToggleSidebar
+            // | MCPToolCall::SwitchMode { .. }
+            // | MCPToolCall::RefreshSidebar
+            // | MCPToolCall::FocusSearch => {
+            //     Ok(MCPToolResult::error(
+            //         "Herramienta de UI requiere canal de comunicación con la app (pendiente de implementar)".to_string()
+            //     ))
+            // }
 
             // === No implementadas aún ===
             _ => Ok(MCPToolResult::error(
-                "Herramienta no implementada todavía".to_string()
+                "Herramienta no implementada todavía".to_string(),
             )),
         }
     }
@@ -179,41 +165,49 @@ impl MCPToolExecutor {
         // Quitar extensión .md si ya existe (create_note la agrega automáticamente)
         let clean_name = name.strip_suffix(".md").unwrap_or(name);
 
+        // Si el nombre ya contiene la ruta de carpeta (ej: "test/nota"), extraer solo el nombre
+        let (actual_folder, base_name) = if clean_name.contains('/') {
+            let parts: Vec<&str> = clean_name.rsplitn(2, '/').collect();
+            if parts.len() == 2 {
+                (Some(parts[1]), parts[0])
+            } else {
+                (None, clean_name)
+            }
+        } else {
+            (None, clean_name)
+        };
+
+        // Determinar la carpeta final: priorizar la extraída del nombre
+        let final_folder = actual_folder.or(folder);
+
         // Si se especifica una carpeta, crear el archivo directamente en esa carpeta
-        let file_path = if let Some(folder_name) = folder {
+        let file_path = if let Some(folder_name) = final_folder {
             // Asegurar que la carpeta existe
             let folder_path = self.notes_dir.root().join(folder_name);
             std::fs::create_dir_all(&folder_path)?;
 
-            // Crear ruta completa al archivo
-            folder_path.join(format!("{}.md", clean_name))
+            // Crear ruta completa al archivo usando solo el nombre base
+            folder_path.join(format!("{}.md", base_name))
         } else {
-            self.notes_dir.root().join(format!("{}.md", clean_name))
+            self.notes_dir.root().join(format!("{}.md", base_name))
         };
 
         // Escribir el contenido directamente
         std::fs::write(&file_path, content)?;
 
-        // Crear un objeto NoteFile para retornar información
-        let note_name = if let Some(folder_name) = folder {
-            format!("{}/{}", folder_name, clean_name)
-        } else {
-            clean_name.to_string()
-        };
-
-        // Indexar en BD
+        // Indexar en BD (el nombre debe ser solo el base_name, sin carpeta)
         if let Err(e) = self.notes_db.borrow().index_note(
-            &note_name,
+            base_name,
             file_path.to_str().unwrap_or(""),
             content,
-            folder,
+            final_folder,
         ) {
             eprintln!("Error indexando nota: {}", e);
         }
 
         Ok(MCPToolResult::success(json!({
-            "note_name": clean_name,
-            "message": self.i18n.borrow().t("mcp_note_created").replace("{}", clean_name),
+            "note_name": base_name,
+            "message": self.i18n.borrow().t("mcp_note_created").replace("{}", base_name),
             "path": file_path.to_str().unwrap_or("")
         })))
     }
@@ -607,6 +601,154 @@ impl MCPToolExecutor {
         })))
     }
 
+    fn find_empty_items(&self, item_type: Option<&str>) -> Result<MCPToolResult> {
+        let search_type = item_type.unwrap_or("all");
+        let base_path = self.notes_dir.root();
+
+        let mut empty_notes = Vec::new();
+        let mut empty_folders = Vec::new();
+
+        // Función recursiva para explorar directorios
+        fn scan_directory(
+            path: &std::path::Path,
+            base: &std::path::Path,
+            search_type: &str,
+            empty_notes: &mut Vec<String>,
+            empty_folders: &mut Vec<String>,
+        ) -> Result<()> {
+            if let Ok(entries) = std::fs::read_dir(path) {
+                let mut folder_has_content = false;
+
+                for entry in entries.flatten() {
+                    let entry_path = entry.path();
+
+                    if entry_path.is_dir() {
+                        // Recursivamente escanear subcarpeta
+                        scan_directory(&entry_path, base, search_type, empty_notes, empty_folders)?;
+                        folder_has_content = true;
+                    } else if entry_path.is_file() {
+                        folder_has_content = true;
+
+                        // Verificar si es una nota vacía
+                        if (search_type == "notes" || search_type == "all")
+                            && entry_path.extension().and_then(|s| s.to_str()) == Some("md")
+                        {
+                            if let Ok(content) = std::fs::read_to_string(&entry_path) {
+                                let trimmed = content.trim();
+                                if trimmed.is_empty()
+                                    || trimmed == "# "
+                                    || trimmed.starts_with("# \n")
+                                {
+                                    if let Ok(relative) = entry_path.strip_prefix(base) {
+                                        if let Some(name) = relative.to_str() {
+                                            empty_notes
+                                                .push(name.trim_end_matches(".md").to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Si la carpeta no tiene contenido y no es la raíz
+                if !folder_has_content
+                    && path != base
+                    && (search_type == "folders" || search_type == "all")
+                {
+                    if let Ok(relative) = path.strip_prefix(base) {
+                        if let Some(name) = relative.to_str() {
+                            empty_folders.push(name.to_string());
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        scan_directory(
+            base_path,
+            base_path,
+            search_type,
+            &mut empty_notes,
+            &mut empty_folders,
+        )?;
+
+        let total = empty_notes.len() + empty_folders.len();
+        let message = match search_type {
+            "notes" => format!("✓ {} empty notes found", empty_notes.len()),
+            "folders" => format!("✓ {} empty folders found", empty_folders.len()),
+            _ => format!(
+                "✓ {} empty items found ({} notes, {} folders)",
+                total,
+                empty_notes.len(),
+                empty_folders.len()
+            ),
+        };
+
+        Ok(MCPToolResult::success(json!({
+            "empty_notes": empty_notes,
+            "empty_folders": empty_folders,
+            "total": total,
+            "message": message
+        })))
+    }
+
+    fn get_system_datetime(&self) -> Result<MCPToolResult> {
+        use chrono::{Datelike, Local, Timelike};
+
+        let now = Local::now();
+
+        // Obtener nombre del día de la semana en español
+        let weekday = match now.weekday() {
+            chrono::Weekday::Mon => "Lunes",
+            chrono::Weekday::Tue => "Martes",
+            chrono::Weekday::Wed => "Miércoles",
+            chrono::Weekday::Thu => "Jueves",
+            chrono::Weekday::Fri => "Viernes",
+            chrono::Weekday::Sat => "Sábado",
+            chrono::Weekday::Sun => "Domingo",
+        };
+
+        // Obtener nombre del mes en español
+        let month = match now.month() {
+            1 => "Enero",
+            2 => "Febrero",
+            3 => "Marzo",
+            4 => "Abril",
+            5 => "Mayo",
+            6 => "Junio",
+            7 => "Julio",
+            8 => "Agosto",
+            9 => "Septiembre",
+            10 => "Octubre",
+            11 => "Noviembre",
+            12 => "Diciembre",
+            _ => "Desconocido",
+        };
+
+        Ok(MCPToolResult::success(json!({
+            "date": now.format("%Y-%m-%d").to_string(),
+            "time": now.format("%H:%M:%S").to_string(),
+            "datetime": now.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "datetime_readable": format!("{}, {} de {} de {} a las {}:{:02}",
+                weekday, now.day(), month, now.year(), now.hour(), now.minute()),
+            "weekday": weekday,
+            "day": now.day(),
+            "month": now.month(),
+            "month_name": month,
+            "year": now.year(),
+            "hour": now.hour(),
+            "minute": now.minute(),
+            "second": now.second(),
+            "timezone": now.format("%Z").to_string(),
+            "timezone_offset": now.format("%:z").to_string(),
+            "timestamp": now.timestamp(),
+            "message": format!("✓ Fecha y hora del sistema: {}, {} de {} de {} a las {}:{:02}",
+                weekday, now.day(), month, now.year(), now.hour(), now.minute())
+        })))
+    }
+
     // === Nuevas funciones ===
 
     fn rename_note(&self, old_name: &str, new_name: &str) -> Result<MCPToolResult> {
@@ -623,7 +765,7 @@ impl MCPToolExecutor {
 
         // Generar nombre único si ya existe
         let unique_new_name = self.generate_unique_filename(parent_dir, new_name);
-        
+
         let new_path = parent_dir.join(&unique_new_name);
 
         std::fs::rename(&old_path, &new_path)?;
@@ -651,7 +793,9 @@ impl MCPToolExecutor {
         let result_message = if unique_new_name != new_name {
             format!(
                 "Nota renombrada de '{}' a '{}' (el nombre '{}' ya existía)",
-                old_name, db_name, new_name.trim_end_matches(".md")
+                old_name,
+                db_name,
+                new_name.trim_end_matches(".md")
             )
         } else {
             format!("Nota renombrada de '{}' a '{}'", old_name, db_name)
@@ -663,7 +807,7 @@ impl MCPToolExecutor {
             "new_name": db_name
         })))
     }
-    
+
     /// Genera un nombre de archivo único verificando si ya existe
     /// y añadiendo (1), (2), etc. si es necesario
     fn generate_unique_filename(&self, dir: &std::path::Path, base_name: &str) -> String {
@@ -673,15 +817,15 @@ impl MCPToolExecutor {
         } else {
             format!("{}.md", base_name)
         };
-        
+
         let base_path = dir.join(&with_ext);
         if !base_path.exists() {
             return with_ext;
         }
-        
+
         // Extraer nombre sin extensión
         let name_without_ext = base_name.trim_end_matches(".md");
-        
+
         // Si existe, buscar el primer número disponible
         for i in 1..1000 {
             let new_name = format!("{} ({}).md", name_without_ext, i);
@@ -690,9 +834,13 @@ impl MCPToolExecutor {
                 return new_name;
             }
         }
-        
+
         // Si llegamos aquí (muy improbable), usar timestamp
-        format!("{} ({}).md", name_without_ext, chrono::Local::now().timestamp())
+        format!(
+            "{} ({}).md",
+            name_without_ext,
+            chrono::Local::now().timestamp()
+        )
     }
 
     fn duplicate_note(&self, name: &str, new_name: &str) -> Result<MCPToolResult> {
@@ -1088,7 +1236,14 @@ impl MCPToolExecutor {
             }
         }
 
-        // Eliminar carpeta
+        // Eliminar todas las notas de esta carpeta de la BD primero
+        if recursive {
+            if let Err(e) = self.notes_db.borrow().delete_notes_in_folder(name) {
+                eprintln!("⚠️ Error eliminando notas de BD: {}", e);
+            }
+        }
+
+        // Eliminar carpeta del filesystem
         if recursive {
             std::fs::remove_dir_all(&folder_path)?;
         } else {
@@ -1127,7 +1282,13 @@ impl MCPToolExecutor {
             )));
         }
 
+        // Renombrar en el filesystem
         std::fs::rename(&old_path, &new_path)?;
+
+        // Actualizar todas las notas de esta carpeta en la BD
+        if let Err(e) = self.notes_db.borrow().update_notes_folder(old_name, new_name) {
+            eprintln!("⚠️ Error actualizando carpeta en BD: {}", e);
+        }
 
         Ok(MCPToolResult::success(json!({
             "message": format!("✓ Carpeta renombrada: '{}' → '{}'", old_name, new_name),
@@ -1175,7 +1336,20 @@ impl MCPToolExecutor {
             )));
         }
 
+        // Calcular el nuevo path relativo para la BD
+        let new_folder_path = if let Some(parent) = new_parent {
+            format!("{}/{}", parent, folder_name)
+        } else {
+            folder_name.to_string()
+        };
+
+        // Mover en el filesystem
         std::fs::rename(&old_path, &new_path)?;
+
+        // Actualizar todas las notas de esta carpeta en la BD
+        if let Err(e) = self.notes_db.borrow().update_notes_folder(name, &new_folder_path) {
+            eprintln!("⚠️ Error actualizando carpeta en BD: {}", e);
+        }
 
         Ok(MCPToolResult::success(json!({
             "message": format!("✓ Carpeta '{}' movida a '{}'", name, new_parent.unwrap_or("raíz")),
@@ -1358,6 +1532,278 @@ impl MCPToolExecutor {
             "suggested_tags": suggested_tags,
             "max_tags": max_tags,
             "info": "Estos son tags sugeridos basados en frecuencia de palabras. Usa 'add_multiple_tags' para aplicarlos."
+        })))
+    }
+
+    // === Semantic Search Methods ===
+
+    fn semantic_search(
+        &self,
+        query: String,
+        limit: Option<usize>,
+        min_similarity: Option<f32>,
+        folder: Option<String>,
+    ) -> Result<MCPToolResult> {
+        use crate::core::{EmbeddingClient, SearchOptions, SemanticSearch};
+
+        // Obtener configuración de embeddings del NotesConfig real
+        let mut embedding_config = self.notes_config.borrow().get_embedding_config().clone();
+
+        // Si embeddings no tiene API key, usar la de AI config
+        if embedding_config.api_key.is_none() {
+            embedding_config.api_key = self.notes_config.borrow().get_ai_config().api_key.clone();
+        }
+
+        // Verificar si embeddings está habilitado y configurado
+        if !embedding_config.enabled {
+            return Ok(MCPToolResult::error(
+                "Embeddings no habilitado. Actívalo en Configuración > Embeddings.".to_string(),
+            ));
+        }
+
+        if !embedding_config.is_valid() {
+            return Ok(MCPToolResult::error(
+                "Embeddings no configurado correctamente. Verifica la API key en Configuración."
+                    .to_string(),
+            ));
+        }
+
+        let client = EmbeddingClient::new(embedding_config.clone())?;
+
+        // Crear una copia temporal de la base de datos para uso en búsqueda
+        let db_path = self.notes_dir.db_path();
+        let temp_db = crate::core::NotesDatabase::new(&db_path)?;
+        let search_engine = SemanticSearch::new(client, temp_db);
+
+        let threshold_usado = min_similarity.unwrap_or(0.2);
+        println!("🎯 Threshold de similitud: {}", threshold_usado);
+
+        let options = SearchOptions {
+            limit: limit.unwrap_or(10),
+            min_similarity: threshold_usado,
+            folder_filter: folder,
+            ..Default::default()
+        };
+
+        // Ejecutar búsqueda semántica (async -> sync boundary)
+        let results = tokio::runtime::Runtime::new()?
+            .block_on(async { search_engine.search(&query, options).await })?;
+
+        if results.is_empty() {
+            return Ok(MCPToolResult::success(json!({
+                "message": format!("No se encontraron notas similares a '{}'", query),
+                "query": query,
+                "results": [],
+                "total": 0
+            })));
+        }
+
+        let results_json: Vec<_> = results
+            .iter()
+            .map(|r| {
+                json!({
+                    "note_path": r.note_path.display().to_string(),
+                    "chunk_index": r.chunk_index,
+                    "similarity": r.similarity,
+                    "snippet": &r.snippet
+                })
+            })
+            .collect();
+
+        Ok(MCPToolResult::success(json!({
+            "message": format!("✓ {} resultados encontrados para '{}'", results.len(), query),
+            "query": query,
+            "results": results_json,
+            "total": results.len()
+        })))
+    }
+
+    fn find_similar_notes(
+        &self,
+        note_path: String,
+        limit: Option<usize>,
+        min_similarity: Option<f32>,
+    ) -> Result<MCPToolResult> {
+        use crate::core::{EmbeddingClient, SearchOptions, SemanticSearch};
+
+        // Obtener configuración de embeddings del NotesConfig real
+        let mut embedding_config = self.notes_config.borrow().get_embedding_config().clone();
+
+        // Si embeddings no tiene API key, usar la de AI config
+        if embedding_config.api_key.is_none() {
+            embedding_config.api_key = self.notes_config.borrow().get_ai_config().api_key.clone();
+        }
+
+        if !embedding_config.enabled || !embedding_config.is_valid() {
+            return Ok(MCPToolResult::error(
+                "Embeddings no configurado. Habilita embeddings en la configuración.".to_string(),
+            ));
+        }
+
+        let client = EmbeddingClient::new(embedding_config.clone())?;
+        let db_path = self.notes_dir.db_path();
+        let temp_db = crate::core::NotesDatabase::new(&db_path)?;
+        let search_engine = SemanticSearch::new(client, temp_db);
+
+        let options = SearchOptions {
+            limit: limit.unwrap_or(10),
+            min_similarity: min_similarity.unwrap_or(0.2),
+            folder_filter: None,
+            ..Default::default()
+        };
+
+        // Ejecutar búsqueda de notas similares
+        let results = tokio::runtime::Runtime::new()?
+            .block_on(async { search_engine.find_similar_notes(&note_path, options).await })?;
+
+        if results.is_empty() {
+            return Ok(MCPToolResult::success(json!({
+                "message": format!("No se encontraron notas similares a '{}'", note_path),
+                "note_path": note_path,
+                "results": [],
+                "total": 0
+            })));
+        }
+
+        // Agrupar por nota
+        let grouped = SemanticSearch::group_by_note(results);
+
+        let results_json: Vec<_> = grouped
+            .iter()
+            .map(|(path, chunks)| {
+                let avg_similarity =
+                    chunks.iter().map(|c| c.similarity).sum::<f32>() / chunks.len() as f32;
+                let best_snippet = chunks
+                    .iter()
+                    .max_by(|a, b| a.similarity.partial_cmp(&b.similarity).unwrap())
+                    .map(|c| &c.snippet);
+
+                json!({
+                    "note_path": path.display().to_string(),
+                    "similarity": chunks[0].similarity,
+                    "chunk_count": chunks.len(),
+                    "avg_similarity": avg_similarity,
+                    "best_snippet": best_snippet
+                })
+            })
+            .collect();
+
+        Ok(MCPToolResult::success(json!({
+            "message": format!("✓ {} notas similares a '{}'", grouped.len(), note_path),
+            "note_path": note_path,
+            "results": results_json,
+            "total": grouped.len()
+        })))
+    }
+
+    fn get_embedding_stats(&self) -> Result<MCPToolResult> {
+        // Obtener configuración de embeddings del NotesConfig real
+        let embedding_config = self.notes_config.borrow().get_embedding_config().clone();
+        let db_ref = self.notes_db.borrow();
+        let (notes_count, chunks_count, tokens_count) = db_ref.get_embedding_stats()?;
+
+        Ok(MCPToolResult::success(json!({
+            "message": format!("✓ Estadísticas del índice de embeddings"),
+            "stats": {
+                "total_notes": notes_count,
+                "total_chunks": chunks_count,
+                "total_tokens": tokens_count,
+                "model": embedding_config.model,
+                "dimension": embedding_config.dimension,
+                "max_chunk_tokens": embedding_config.max_chunk_tokens,
+                "overlap_tokens": embedding_config.overlap_tokens
+            }
+        })))
+    }
+
+    fn index_note(&self, note_path: String) -> Result<MCPToolResult> {
+        use crate::core::{EmbeddingClient, EmbeddingIndexer, TextChunker};
+
+        // Obtener configuración de embeddings del NotesConfig real
+        let mut embedding_config = self.notes_config.borrow().get_embedding_config().clone();
+
+        // Si embeddings no tiene API key, usar la de AI config
+        if embedding_config.api_key.is_none() {
+            embedding_config.api_key = self.notes_config.borrow().get_ai_config().api_key.clone();
+        }
+
+        if !embedding_config.enabled || !embedding_config.is_valid() {
+            return Ok(MCPToolResult::error(
+                "Embeddings no configurado. Habilita embeddings en la configuración y añade una API key.".to_string()
+            ));
+        }
+
+        // Leer contenido de la nota
+        let note = self
+            .notes_dir
+            .find_note(&note_path)?
+            .ok_or_else(|| anyhow::anyhow!("Nota no encontrada: {}", note_path))?;
+
+        let content = note.read()?;
+        let client = EmbeddingClient::new(embedding_config.clone())?;
+        let db_path = self.notes_dir.db_path();
+        let temp_db = crate::core::NotesDatabase::new(&db_path)?;
+
+        let chunker = TextChunker::new();
+        let indexer = EmbeddingIndexer::new(client, temp_db, chunker);
+
+        // Indexar nota (async)
+        let note_path_buf = std::path::PathBuf::from(&note_path);
+        let result = tokio::runtime::Runtime::new()?
+            .block_on(async { indexer.index_note(&note_path_buf, &content).await })?;
+
+        Ok(MCPToolResult::success(json!({
+            "message": format!("✓ Nota '{}' indexada: {} chunks", note_path, result),
+            "note_path": note_path,
+            "total_chunks": result
+        })))
+    }
+
+    fn reindex_all_notes(&self) -> Result<MCPToolResult> {
+        use crate::core::{EmbeddingClient, EmbeddingIndexer, TextChunker};
+        use std::path::PathBuf;
+
+        let mut config = self.notes_config.borrow().get_embedding_config().clone();
+
+        // Si embeddings no tiene API key, usar la de AI config
+        if config.api_key.is_none() {
+            config.api_key = self.notes_config.borrow().get_ai_config().api_key.clone();
+        }
+
+        if !config.is_valid() {
+            return Ok(MCPToolResult::error(
+                "Embeddings no configurado. Habilita embeddings en la configuración y añade una API key.".to_string()
+            ));
+        }
+
+        // Obtener todas las notas
+        let all_notes = self.notes_dir.list_notes()?;
+        let notes_with_content: Vec<(PathBuf, String)> = all_notes
+            .iter()
+            .filter_map(|note| {
+                let content = note.read().ok()?;
+                Some((PathBuf::from(&note.name), content))
+            })
+            .collect();
+
+        let total_notes = notes_with_content.len();
+        let client = EmbeddingClient::new(config.clone())?;
+        let db_path = self.notes_dir.db_path();
+        let temp_db = crate::core::NotesDatabase::new(&db_path)?;
+
+        let chunker = TextChunker::new();
+        let indexer = EmbeddingIndexer::new(client, temp_db, chunker);
+
+        // Re-indexar todas las notas
+        let result = tokio::runtime::Runtime::new()?
+            .block_on(async { indexer.index_notes(notes_with_content, None).await })?;
+
+        Ok(MCPToolResult::success(json!({
+            "message": format!("✓ Re-indexación completa: {} notas, {} chunks", total_notes, result.total_chunks),
+            "total_notes": result.total_notes,
+            "total_chunks": result.total_chunks,
+            "indexed_notes": result.indexed_notes,
+            "errors": result.errors
         })))
     }
 }

@@ -82,6 +82,12 @@ pub fn create_notes_watcher(
                                 } else {
                                     println!("✅ Nota indexada: {} (carpeta: {:?})", name, folder);
 
+                                    // Indexar embeddings automáticamente
+                                    let _ = sender.send(crate::app::AppMsg::IndexNoteEmbeddings {
+                                        path: path.to_str().unwrap_or("").to_string(),
+                                        content: content.clone(),
+                                    });
+
                                     // Si está en una carpeta, expandirla automáticamente
                                     if let Some(ref folder_name) = folder {
                                         let _ = sender.send(crate::app::AppMsg::ExpandFolder(

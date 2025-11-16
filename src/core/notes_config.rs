@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::embedding_config::EmbeddingConfig;
+
 /// Configuración del asistente AI
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AIConfig {
@@ -85,6 +87,9 @@ pub struct NotesConfig {
     /// Configuración del asistente AI
     #[serde(default)]
     pub ai_config: AIConfig,
+    /// Configuración de embeddings para búsqueda semántica
+    #[serde(default)]
+    pub embedding_config: EmbeddingConfig,
 }
 
 impl Default for NotesConfig {
@@ -104,6 +109,7 @@ impl NotesConfig {
             audio_output_sink: None,
             last_opened_note: None,
             ai_config: AIConfig::default(),
+            embedding_config: EmbeddingConfig::default(),
         }
     }
 
@@ -286,5 +292,67 @@ impl NotesConfig {
     /// Establece si se debe guardar el historial
     pub fn set_ai_save_history(&mut self, save_history: bool) {
         self.ai_config.save_history = save_history;
+    }
+
+    /// Obtiene la configuración de embeddings
+    pub fn get_embedding_config(&self) -> &EmbeddingConfig {
+        &self.embedding_config
+    }
+
+    /// Obtiene la configuración de embeddings mutable
+    pub fn get_embedding_config_mut(&mut self) -> &mut EmbeddingConfig {
+        &mut self.embedding_config
+    }
+
+    /// Habilita o deshabilita el sistema de embeddings
+    pub fn set_embeddings_enabled(&mut self, enabled: bool) {
+        self.embedding_config.enabled = enabled;
+    }
+
+    /// Establece la API key para embeddings
+    pub fn set_embedding_api_key(&mut self, api_key: Option<String>) {
+        self.embedding_config.api_key = api_key;
+    }
+
+    /// Establece el proveedor de embeddings
+    pub fn set_embedding_provider(&mut self, provider: String) {
+        self.embedding_config.provider = provider;
+    }
+
+    /// Establece el modelo de embeddings
+    pub fn set_embedding_model(&mut self, model: String) {
+        self.embedding_config.model = model;
+    }
+
+    /// Obtiene si los embeddings están habilitados
+    pub fn get_embeddings_enabled(&self) -> bool {
+        self.embedding_config.enabled
+    }
+
+    /// Obtiene la API key de embeddings
+    pub fn get_embeddings_api_key(&self) -> Option<String> {
+        self.embedding_config.api_key.clone()
+    }
+
+    /// Obtiene el modelo de embeddings
+    pub fn get_embeddings_model(&self) -> String {
+        self.embedding_config.model.clone()
+    }
+
+    /// Establece la API key de embeddings (alias para compatibilidad)
+    pub fn set_embeddings_api_key(&mut self, api_key: Option<String>) {
+        self.embedding_config.api_key = api_key;
+    }
+
+    /// Establece el modelo de embeddings (alias para compatibilidad)
+    pub fn set_embeddings_model(&mut self, model: String) {
+        self.embedding_config.model = model.clone();
+        // Actualizar dimensión según el modelo
+        self.embedding_config.dimension = match model.as_str() {
+            "qwen/qwen3-embedding-8b" => 4096,
+            "text-embedding-3-small" => 1536,
+            "text-embedding-3-large" => 3072,
+            _ => 4096, // Por defecto qwen3
+        };
     }
 }

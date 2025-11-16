@@ -92,6 +92,9 @@ sudo ./install.sh
 - **YAML frontmatter tags** - Tags in lists (• tag) are also clickable
 - **Precise tag search** - Search #tag finds only that specific tag
 - **Image preview** - See images inline, click to open
+- **🔗 Backlinks with @mentions** - Link notes with `@NoteName`, autocomplete included (v0.1.8)
+- **🔗 Smart URL detection** - Pasted URLs auto-convert to markdown links (v0.1.8)
+- **📂 Open in file manager** - Right-click notes/folders → open in explorer (v0.1.8)
 
 ### 🤖 AI Integration
 - **Chat with AI** - Ask questions about your notes

@@ -35,6 +35,7 @@ fn signal_notes_changed() {
 pub struct MCPServerState {
     notes_dir: NotesDirectory,
     notes_db: Arc<Mutex<NotesDatabase>>,
+    notes_config: Arc<Mutex<crate::core::NotesConfig>>,
     i18n: Arc<Mutex<I18n>>,
 }
 
@@ -88,11 +89,13 @@ pub struct ListToolsResponse {
 pub async fn start_mcp_server(
     notes_dir: NotesDirectory,
     notes_db: Arc<Mutex<NotesDatabase>>,
+    notes_config: Arc<Mutex<crate::core::NotesConfig>>,
     i18n: Arc<Mutex<I18n>>,
 ) -> Result<()> {
     let state = MCPServerState {
         notes_dir,
         notes_db,
+        notes_config,
         i18n,
     };
 
@@ -135,7 +138,7 @@ async fn list_tools(
     State(state): State<MCPServerState>,
     Json(request): Json<ListToolsRequest>,
 ) -> Json<JsonRpcResponse<ListToolsResponse>> {
-    let tools = crate::mcp::tool_schemas::get_core_tool_definitions();
+    let tools = crate::mcp::tool_schemas::get_all_tool_definitions_as_values();
 
     Json(JsonRpcResponse {
         jsonrpc: "2.0".to_string(),
@@ -157,6 +160,11 @@ async fn call_tool(
         db.clone_connection()
     };
 
+    let notes_config_clone = {
+        let config = state.notes_config.lock().unwrap();
+        config.clone()
+    };
+
     let i18n_clone = {
         let i18n = state.i18n.lock().unwrap();
         i18n.clone()
@@ -165,6 +173,7 @@ async fn call_tool(
     let executor = MCPToolExecutor::new(
         state.notes_dir.clone(),
         std::rc::Rc::new(std::cell::RefCell::new(notes_db_clone)),
+        std::rc::Rc::new(std::cell::RefCell::new(notes_config_clone)),
         std::rc::Rc::new(std::cell::RefCell::new(i18n_clone)),
     );
 

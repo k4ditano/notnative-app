@@ -107,6 +107,10 @@ impl I18n {
         translations.insert("rename", ("Renombrar", "Rename"));
         translations.insert("delete", ("Eliminar", "Delete"));
         translations.insert(
+            "open_in_file_manager",
+            ("Abrir en explorador", "Open in file manager"),
+        );
+        translations.insert(
             "confirm_delete",
             (
                 "¿Estás seguro de eliminar",
@@ -444,6 +448,22 @@ impl I18n {
                 "All conversation history has been deleted",
             ),
         );
+        
+        // Chat AI - Modo Agente
+        translations.insert("chat_mode_agent", ("Modo: Agente", "Mode: Agent"));
+        translations.insert("chat_mode_normal", ("Modo: Chat", "Mode: Chat"));
+        translations.insert(
+            "chat_toggle_mode_tooltip",
+            (
+                "Alternar: Modo Agente (con herramientas) / Chat Normal (sin herramientas)",
+                "Toggle: Agent Mode (with tools) / Normal Chat (without tools)",
+            ),
+        );
+        translations.insert("chat_agent_thinking", ("💭 Pensamiento", "💭 Thought"));
+        translations.insert("chat_agent_action", ("🔧 Acción", "🔧 Action"));
+        translations.insert("chat_agent_observation", ("👁️ Observación", "👁️ Observation"));
+        translations.insert("chat_agent_answer", ("✅ Respuesta", "✅ Answer"));
+        
         translations.insert(
             "music_player_title",
             ("Reproductor de Música", "Music Player"),

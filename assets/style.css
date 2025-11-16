@@ -102,6 +102,10 @@ entry:focus {
   background-color: @base;
   color: @text;
   border-right: 1px solid @border;
+  box-sizing: border-box;
+  overflow: hidden; /* Evitar que hijos se desborden fuera del sidebar */
+  position: relative; /* Establecer contexto de posicionamiento */
+  z-index: 100; /* Mantener el sidebar por encima del contenido del chat */
 }
 
 .sidebar .heading {
@@ -115,6 +119,13 @@ list, listbox {
   color: @text;
 }
 
+.navigation-sidebar.listbox {
+  padding-left: 4px;
+  padding-right: 4px;
+  box-sizing: border-box;
+  width: 180px;
+}
+
 .navigation-sidebar row,
 list row,
 listbox row {
@@ -124,6 +135,36 @@ listbox row {
   margin: 2px 8px;
   padding: 4px;
   transition: background-color 200ms ease;
+  max-width: 180px; /* Reducido para asegurar que quepa dentro del sidebar */
+  box-sizing: border-box; /* Asegurar padding dentro del ancho */
+  padding-left: 8px; /* Espacio interno para evitar texto en el borde */
+  overflow: hidden; /* Cortar contenido que se salga */
+  position: relative; /* Contexto de posicionamiento */
+}
+
+.navigation-sidebar row * {
+  max-width: 170px; /* Limitar ancho de elementos hijos */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-sizing: border-box;
+}
+
+.navigation-sidebar {
+  padding-left: 8px;
+  padding-right: 8px;
+  box-sizing: border-box;
+  max-width: 200px;
+  overflow: visible; /* Permitir que los resultados de búsqueda no se corten */
+  position: relative; /* Contexto de posicionamiento */
+}
+
+.navigation-sidebar label {
+  min-width: 0; /* Permite que el label se reduzca y recurra a ellipsize */
+  white-space: nowrap; /* evitar wrap para los labels */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px; /* Ancho máximo estricto */
+  box-sizing: border-box;
 }
 
 .navigation-sidebar row:hover,
@@ -155,6 +196,15 @@ listbox row:selected {
   border-color: @border;
 }
 
+/* Toggle semántico dentro del sidebar (compacto) */
+.sidebar togglebutton {
+  font-size: 0.85em;
+  padding: 6px 8px;
+  min-width: 0;
+  margin-top: 4px;
+  margin-bottom: 6px;
+}
+
 .status-bar {
   background-color: @base;
   color: @text;
@@ -170,6 +220,25 @@ listbox row:selected {
   margin-right: 12px;
   padding: 2px 8px;
   border-radius: 3px;
+}
+
+/* Indicador de modo clickeable */
+.mode-indicator {
+  cursor: pointer;
+  padding: 4px 12px;
+  border-radius: 4px;
+  background-color: alpha(@selected-text, 0.1);
+  transition: all 200ms ease;
+}
+
+.mode-indicator:hover {
+  background-color: alpha(@selected-text, 0.2);
+  transform: scale(1.05);
+}
+
+.mode-indicator:active {
+  background-color: alpha(@selected-text, 0.3);
+  transform: scale(0.98);
 }
 
 /* Estilo para el TextView principal */
@@ -815,6 +884,8 @@ popover.tags-popover separator {
 /* Contenedor principal del Chat AI */
 .chat-ai-container {
   background-color: @base;
+  position: relative;
+  z-index: 1; /* Mantener el chat por debajo del sidebar */
 }
 
 /* === CHAT AI LAYOUT === */
@@ -909,6 +980,8 @@ progressbar.chat-tokens-progress.chat-token-danger progress {
 box.chat-context-panel {
   background: transparent;
   border-right: 1px solid alpha(@border, 0.2);
+  position: relative;
+  z-index: 50; /* Mantener por encima del historial del chat pero debajo del sidebar */
 }
 
 box.chat-context-header {
@@ -1209,6 +1282,105 @@ button.chat-send-button label {
   color: @text;
 }
 
+/* Botón toggle de modo de chat */
+togglebutton.chat-mode-toggle {
+  border-radius: 6px;
+  padding: 0 12px;
+  min-height: 36px;
+  min-width: 36px;
+  margin-left: 0;
+  background: alpha(@border, 0.1);
+  border: 1px solid alpha(@border, 0.3);
+}
+
+togglebutton.chat-mode-toggle:hover {
+  background: alpha(@border, 0.15);
+  border-color: alpha(@border, 0.4);
+}
+
+togglebutton.chat-mode-toggle:checked {
+  background: alpha(@selected-text, 0.15);
+  border-color: alpha(@selected-text, 0.3);
+  color: @text;
+}
+
+togglebutton.chat-mode-toggle:checked:hover {
+  background: alpha(@selected-text, 0.2);
+  border-color: alpha(@selected-text, 0.4);
+}
+
+/* Toggle del modo de chat */
+.chat-mode-toggle {
+  min-width: 36px;
+  min-height: 36px;
+  padding: 6px;
+  border-radius: 8px;
+  background-color: alpha(@base, 0.5);
+  border: 1px solid @border;
+}
+
+.chat-mode-toggle:hover {
+  background-color: alpha(@selected-text, 0.1);
+}
+
+.chat-mode-toggle:checked {
+  background-color: @selected-text;
+  color: @base;
+}
+
+.chat-mode-toggle:checked:hover {
+  background-color: alpha(@selected-text, 0.9);
+}
+
+/* Indicador de modo activo */
+.chat-mode-indicator {
+  padding: 6px 12px;
+  border-radius: 6px;
+  background-color: alpha(@selected-text, 0.1);
+  border: 1px solid alpha(@border, 0.5);
+}
+
+.chat-mode-label {
+  font-size: 10pt;
+  font-weight: 500;
+  color: @selected-text;
+}
+
+/* Sugerencias de notas con @ */
+popover.background {
+  background-color: @base;
+  border: 1px solid @border;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.suggestions-list {
+  background-color: transparent;
+  border-radius: 6px;
+  padding: 4px;
+}
+
+.suggestions-list row {
+  border-radius: 4px;
+  padding: 2px;
+  min-height: 32px;
+  transition: background-color 150ms ease;
+}
+
+.suggestions-list row:hover {
+  background-color: alpha(@selected-text, 0.15);
+}
+
+.suggestions-list row:selected {
+  background-color: alpha(@selected-text, 0.25);
+}
+
+.suggestions-list label {
+  color: @text;
+  font-size: 10pt;
+  font-weight: 500;
+}
+
 @keyframes chatTypingPulse {
   0% {
     opacity: 0.6;
@@ -1219,4 +1391,103 @@ button.chat-send-button label {
   100% {
     opacity: 0.6;
   }
+}
+
+/* Contenedores de resultados de búsqueda - restricciones estrictas */
+/* Contenedores de resultados en sidebar (usar ancho natural) */
+.navigation-sidebar box { /* solo limitar overflow sin forzar ancho */
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.navigation-sidebar box > * {
+  box-sizing: border-box;
+}
+
+/* Barra de búsqueda flotante estilo macOS */
+.floating-search {
+  background-color: alpha(@base, 0.98);
+  border: 1px solid @border;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3),
+              0 2px 6px rgba(0, 0, 0, 0.15);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.floating-search entry {
+  min-height: 36px;
+  font-size: 11pt;
+  background-color: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.floating-search entry:focus {
+  border: none;
+  box-shadow: none;
+  background-color: alpha(@selected-text, 0.05);
+  border-radius: 6px;
+}
+
+.floating-search button {
+  min-height: 36px;
+  min-width: 36px;
+}
+
+.floating-search scrolledwindow {
+  border-top: 1px solid alpha(@border, 0.5);
+  margin-top: 8px;
+}
+
+.floating-search list {
+  background-color: transparent;
+  border-radius: 8px;
+}
+
+.floating-search row {
+  border-radius: 6px;
+  margin: 4px 8px;
+  padding: 0;
+}
+
+.floating-search row:hover {
+  background-color: alpha(@selected-text, 0.1);
+}
+
+.floating-search row:selected {
+  background-color: alpha(@selected-text, 0.2);
+}
+
+/* === Notificaciones Toast === */
+.notification-toast {
+  background-color: alpha(@base, 0.95);
+  border: 1px solid @border;
+  border-radius: 12px;
+  padding: 12px 24px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3),
+              0 2px 8px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  min-width: 200px;
+  max-width: 500px;
+}
+
+.notification-toast label {
+  font-size: 11pt;
+  color: @text;
+  font-weight: 500;
+}
+
+/* === AboutDialog === */
+window.aboutdialog {
+  padding: 20px;
+}
+
+window.aboutdialog box {
+  padding: 16px;
+}
+
+window.aboutdialog label {
+  margin-top: 8px;
+  margin-bottom: 8px;
 }

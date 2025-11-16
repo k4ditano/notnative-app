@@ -47,6 +47,14 @@ pub trait AIClient: Send + Sync {
             .await?;
         Ok(response.content.unwrap_or_default())
     }
+    
+    /// Envía mensaje con streaming (chunks de texto en tiempo real)
+    /// Devuelve un canal de tokio para recibir chunks
+    async fn send_message_streaming(
+        &self,
+        messages: &[ChatMessage],
+        context: &str,
+    ) -> Result<tokio::sync::mpsc::UnboundedReceiver<String>>;
 }
 
 /// Cliente para OpenAI
@@ -99,68 +107,37 @@ impl AIClient for OpenAIClient {
         let mut api_messages = Vec::new();
         let mut raw_messages: Vec<Value> = Vec::new();
 
-        // Construir mensaje de sistema con contexto
-        let system_message = if !context.is_empty() {
-            format!(
-                "Eres un asistente útil para gestionar notas en NotNative.\n\n\
-                IMPORTANTE: El usuario ha adjuntado las siguientes notas al contexto actual. \
-                Puedes leer y trabajar directamente con el contenido que se muestra a continuación:\n\n\
-                {}\n\n\
-                Si el usuario hace preguntas sobre estas notas, responde usando directamente este contenido. \
-                NO necesitas usar la herramienta read_note para notas que ya están en el contexto.\n\n\
-                📁 ORGANIZACIÓN DE NOTAS Y CARPETAS:\n\
-                - Para CREAR carpeta nueva: usa create_folder con el nombre de la carpeta\n\
-                - Para MOVER nota existente a carpeta: usa move_note (name=nota, folder=carpeta)\n\
-                - Para CREAR nota nueva en carpeta: usa create_note con parámetros (name=nota, folder=carpeta)\n\
-                - NUNCA incluyas la carpeta en el nombre de la nota (❌ 'workflows/nota.md' ✓ name='nota', folder='workflows')\n\n\
-                🔧 EJECUCIÓN DE HERRAMIENTAS:\n\
-                - SIEMPRE que el usuario pida una acción (crear, mover, renombrar, buscar, etc), EJECUTA la herramienta correspondiente\n\
-                - NO digas 'voy a hacer X' sin ejecutar la herramienta - hazlo directamente\n\
-                - Si dices que harás algo, DEBES incluir el tool_call en la misma respuesta\n\
-                - Ejemplo: Usuario dice 'renombra la nota' → TÚ ejecutas rename_note inmediatamente, no solo respondes 'voy a renombrarla'\n\n\
-                ⚠️ FORMATO DE RESPUESTA CON HERRAMIENTAS:\n\
-                Cuando uses herramientas, las ejecutas Y luego recibes los resultados. Entonces DEBES:\n\
-                1. Incluir un mensaje de texto junto con los tool_calls\n\
-                2. En ese texto, explica QUÉ ENCONTRASTE y POR QUÉ es relevante\n\n\
-                Ejemplo de búsqueda:\n\
-                Usuario: 'Busca notas con contraseñas'\n\
-                Tu respuesta: 'He encontrado 4 notas que contienen información sobre contraseñas. \
-                La mayoría parecen ser credenciales de servicios web y configuraciones de servidor. \
-                Te recomiendo revisar especialmente \"Cuentas-Servicios.md\" que tiene múltiples contraseñas en texto plano.'\n\
-                [+ tool_call a search_notes]\n\n\
-                NUNCA respondas SOLO con tool_calls. Siempre proporciona contexto y análisis de los resultados.",
-                context
-            )
-        } else {
-            "Eres un asistente útil para gestionar notas en NotNative. \
-            Puedes usar las herramientas disponibles para crear, leer, modificar y organizar notas.\n\n\
-            📁 ORGANIZACIÓN DE NOTAS Y CARPETAS:\n\
-            - Para CREAR carpeta nueva: usa create_folder con el nombre de la carpeta\n\
-            - Para MOVER nota existente a carpeta: usa move_note (name=nota, folder=carpeta)\n\
-            - Para CREAR nota nueva en carpeta: usa create_note con parámetros (name=nota, folder=carpeta)\n\
-            - NUNCA incluyas la carpeta en el nombre de la nota (❌ 'workflows/nota.md' ✓ name='nota', folder='workflows')\n\n\
-            ⚠️ FORMATO DE RESPUESTA CON HERRAMIENTAS:\n\
-            Cuando uses herramientas, las ejecutas Y luego recibes los resultados. Entonces DEBES:\n\
-            1. Incluir un mensaje de texto junto con los tool_calls\n\
-            2. En ese texto, explica QUÉ ENCONTRASTE y POR QUÉ es relevante\n\n\
-            Ejemplo de búsqueda:\n\
-            Usuario: 'Busca notas con contraseñas'\n\
-            Tu respuesta: 'He encontrado 4 notas que contienen información sobre contraseñas. \
-            La mayoría parecen ser credenciales de servicios web y configuraciones de servidor. \
-            Te recomiendo revisar especialmente \"Cuentas-Servicios.md\" que tiene múltiples contraseñas en texto plano.'\n\
-            [+ tool_call a search_notes]\n\n\
-            NUNCA respondas SOLO con tool_calls. Siempre proporciona contexto y análisis de los resultados."
-                .to_string()
-        };
+        // Solo añadir system prompt automático si no viene uno en los mensajes
+        let has_system_prompt = messages
+            .iter()
+            .any(|m| matches!(m.role, MessageRole::System));
 
-        let system_msg = ChatCompletionRequestSystemMessageArgs::default()
-            .content(system_message.clone())
-            .build()?;
-        api_messages.push(ChatCompletionRequestMessage::System(system_msg));
-        raw_messages.push(json!({
-            "role": "system",
-            "content": system_message.clone(),
-        }));
+        if !has_system_prompt {
+            // System prompt simplificado - inspirado en llm-chain
+            let system_message = if !context.is_empty() {
+                format!(
+                    "Eres un asistente para gestionar notas en NotNative.\n\n\
+                    Notas adjuntas:\n{}\n\n\
+                    REGLA: Ejecuta herramientas directamente, sin explicaciones previas. \
+                    Puedes incluir texto junto con el tool call para explicar.",
+                    context
+                )
+            } else {
+                "Eres un asistente para gestionar notas en NotNative.\n\n\
+                REGLA: Ejecuta herramientas directamente, sin explicaciones previas. \
+                Puedes incluir texto junto con el tool call para explicar."
+                    .to_string()
+            };
+
+            let system_msg = ChatCompletionRequestSystemMessageArgs::default()
+                .content(system_message.clone())
+                .build()?;
+            api_messages.push(ChatCompletionRequestMessage::System(system_msg));
+            raw_messages.push(json!({
+                "role": "system",
+                "content": system_message.clone(),
+            }));
+        }
 
         // Agregar historial de mensajes
         for msg in messages {
@@ -225,6 +202,113 @@ impl AIClient for OpenAIClient {
             .ok_or_else(|| anyhow::anyhow!("No se recibió respuesta de la IA"))?;
 
         Ok(AIResponse::text(reply))
+    }
+    
+    async fn send_message_streaming(
+        &self,
+        messages: &[ChatMessage],
+        context: &str,
+    ) -> Result<tokio::sync::mpsc::UnboundedReceiver<String>> {
+        use async_openai::{
+            Client,
+            config::OpenAIConfig,
+            types::{
+                ChatCompletionRequestMessage,
+                ChatCompletionRequestSystemMessageArgs,
+                ChatCompletionRequestUserMessageArgs,
+                ChatCompletionRequestAssistantMessageArgs,
+                CreateChatCompletionRequestArgs,
+            },
+        };
+        use futures::StreamExt;
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // Configurar cliente
+        let mut config = OpenAIConfig::new().with_api_key(&self.api_key);
+        if self.api_key.starts_with("sk-or-") {
+            config = config.with_api_base("https://openrouter.ai/api/v1");
+        }
+        let client = Client::with_config(config);
+
+        // Construir mensajes
+        let mut api_messages = Vec::new();
+
+        // System prompt si hay contexto
+        if !context.is_empty() {
+            let system_msg = ChatCompletionRequestSystemMessageArgs::default()
+                .content(format!(
+                    "Eres un asistente conversacional amigable y útil.\n\nContexto:\n{}",
+                    context
+                ))
+                .build()?;
+            api_messages.push(ChatCompletionRequestMessage::System(system_msg));
+        }
+
+        // Agregar mensajes del historial
+        for msg in messages {
+            match msg.role {
+                MessageRole::User => {
+                    let user_msg = ChatCompletionRequestUserMessageArgs::default()
+                        .content(msg.content.clone())
+                        .build()?;
+                    api_messages.push(ChatCompletionRequestMessage::User(user_msg));
+                }
+                MessageRole::Assistant => {
+                    let assistant_msg = ChatCompletionRequestAssistantMessageArgs::default()
+                        .content(msg.content.clone())
+                        .build()?;
+                    api_messages.push(ChatCompletionRequestMessage::Assistant(assistant_msg));
+                }
+                MessageRole::System => {
+                    let system_msg = ChatCompletionRequestSystemMessageArgs::default()
+                        .content(msg.content.clone())
+                        .build()?;
+                    api_messages.push(ChatCompletionRequestMessage::System(system_msg));
+                }
+            }
+        }
+
+        // Crear request con streaming habilitado
+        let request = CreateChatCompletionRequestArgs::default()
+            .model(&self.model)
+            .messages(api_messages)
+            .max_tokens(self.max_tokens as u16)
+            .temperature(self.temperature)
+            .stream(true) // Habilitar streaming!
+            .build()?;
+
+        // Spawn task para manejar el stream
+        tokio::spawn(async move {
+            match client.chat().create_stream(request).await {
+                Ok(mut stream) => {
+                    while let Some(result) = stream.next().await {
+                        match result {
+                            Ok(response) => {
+                                // Extraer contenido del delta
+                                if let Some(choice) = response.choices.first() {
+                                    if let Some(content) = &choice.delta.content {
+                                        // Enviar chunk por el canal
+                                        if tx.send(content.clone()).is_err() {
+                                            break; // Receptor cerrado
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Error en stream: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error creando stream: {}", e);
+                }
+            }
+        });
+
+        Ok(rx)
     }
 }
 
@@ -420,6 +504,16 @@ impl AIClient for AnthropicClient {
             "Anthropic client no implementado aún. Usa OpenAI/OpenRouter."
         ))
     }
+    
+    async fn send_message_streaming(
+        &self,
+        _messages: &[ChatMessage],
+        _context: &str,
+    ) -> Result<tokio::sync::mpsc::UnboundedReceiver<String>> {
+        Err(anyhow::anyhow!(
+            "Streaming no implementado para Anthropic aún."
+        ))
+    }
 }
 
 /// Cliente para Ollama (modelos locales) - stub para implementación futura
@@ -453,6 +547,16 @@ impl AIClient for OllamaClient {
         // TODO: Implementar usando ollama-rs
         Err(anyhow::anyhow!(
             "Ollama client no implementado aún. Usa OpenRouter por ahora."
+        ))
+    }
+    
+    async fn send_message_streaming(
+        &self,
+        _messages: &[ChatMessage],
+        _context: &str,
+    ) -> Result<tokio::sync::mpsc::UnboundedReceiver<String>> {
+        Err(anyhow::anyhow!(
+            "Streaming no implementado para Ollama aún."
         ))
     }
 }

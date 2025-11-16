@@ -99,7 +99,7 @@ pub fn get_core_tool_definitions() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "search_notes",
-                "description": "Busca notas por texto. USA cuando el usuario diga: 'busca', 'encuentra', 'notas sobre', 'notas que contengan'.",
+                "description": "Búsqueda SQL literal/exacta de texto. USA SOLO para: palabras exactas, código específico, IDs, nombres precisos. Para búsquedas conceptuales (temas, ideas, información sobre...) USA semantic_search en su lugar.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -276,6 +276,34 @@ pub fn get_all_tool_definitions() -> Vec<MCPTool> {
             }),
         },
         // ==================== BÚSQUEDA ====================
+        // ⭐ BÚSQUEDA SEMÁNTICA PRIMERO (más potente, una búsqueda es suficiente)
+        MCPTool {
+            name: "semantic_search".to_string(),
+            description: "⭐ BÚSQUEDA RECOMENDADA ⭐ Busca notas por similitud semántica usando embeddings. Encuentra contenido relacionado aunque use diferentes palabras. USA POR DEFECTO cuando el usuario pida: 'busca', 'encuentra', 'hay notas sobre', 'información sobre', 'notas relacionadas con'. UNA SOLA búsqueda semántica es suficiente (no repitas). Solo usa search_notes si necesitas texto literal exacto.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Consulta en lenguaje natural (ej: 'machine learning', 'cómo funciona rust ownership', 'información sensible')"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Número máximo de resultados (default: 10)"
+                    },
+                    "min_similarity": {
+                        "type": "number",
+                        "description": "Similitud mínima 0.0-1.0 (default: 0.5). Valores altos = más estricto"
+                    },
+                    "folder": {
+                        "type": "string",
+                        "description": "Filtrar por carpeta específica (opcional)"
+                    }
+                },
+                "required": ["query"]
+            }),
+        },
+        // Búsqueda SQL literal (solo para texto exacto)
         MCPTool {
             name: "search_notes".to_string(),
             description: "Busca notas por contenido o nombre usando texto completo".to_string(),
@@ -464,41 +492,42 @@ pub fn get_all_tool_definitions() -> Vec<MCPTool> {
                 "required": ["name"]
             }),
         },
-        MCPTool {
-            name: "show_notification".to_string(),
-            description: "Muestra una notificación en la interfaz de NotNative".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "message": {
-                        "type": "string",
-                        "description": "Mensaje a mostrar"
-                    },
-                    "level": {
-                        "type": "string",
-                        "enum": ["info", "warning", "error", "success"],
-                        "description": "Nivel de importancia de la notificación"
-                    }
-                },
-                "required": ["message"]
-            }),
-        },
-        MCPTool {
-            name: "toggle_sidebar".to_string(),
-            description: "Muestra u oculta la barra lateral de notas".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {}
-            }),
-        },
-        MCPTool {
-            name: "refresh_sidebar".to_string(),
-            description: "Refresca la lista de notas en la barra lateral".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {}
-            }),
-        },
+        // ==================== UI DESHABILITADAS ====================
+        // MCPTool {
+        //     name: "show_notification".to_string(),
+        //     description: "Muestra una notificación en la interfaz de NotNative".to_string(),
+        //     parameters: json!({
+        //         "type": "object",
+        //         "properties": {
+        //             "message": {
+        //                 "type": "string",
+        //                 "description": "Mensaje a mostrar"
+        //             },
+        //             "level": {
+        //                 "type": "string",
+        //                 "enum": ["info", "warning", "error", "success"],
+        //                 "description": "Nivel de importancia de la notificación"
+        //             }
+        //         },
+        //         "required": ["message"]
+        //     }),
+        // },
+        // MCPTool {
+        //     name: "toggle_sidebar".to_string(),
+        //     description: "Muestra u oculta la barra lateral de notas".to_string(),
+        //     parameters: json!({
+        //         "type": "object",
+        //         "properties": {}
+        //     }),
+        // },
+        // MCPTool {
+        //     name: "refresh_sidebar".to_string(),
+        //     description: "Refresca la lista de notas en la barra lateral".to_string(),
+        //     parameters: json!({
+        //         "type": "object",
+        //         "properties": {}
+        //     }),
+        // },
         // ==================== ORGANIZACIÓN ====================
         MCPTool {
             name: "create_folder".to_string(),
@@ -521,6 +550,28 @@ pub fn get_all_tool_definitions() -> Vec<MCPTool> {
         MCPTool {
             name: "list_folders".to_string(),
             description: "Lista todas las carpetas de notas".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
+        MCPTool {
+            name: "find_empty_items".to_string(),
+            description: "Encuentra notas vacías y/o carpetas vacías. Útil para limpiar el sistema de notas.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "item_type": {
+                        "type": "string",
+                        "description": "Tipo de elementos a buscar: 'notes' (solo notas vacías), 'folders' (solo carpetas vacías), 'all' (ambos). Por defecto: 'all'",
+                        "enum": ["notes", "folders", "all"]
+                    }
+                }
+            }),
+        },
+        MCPTool {
+            name: "get_system_date_time".to_string(),
+            description: "Obtiene la fecha y hora actual del sistema. Devuelve fecha completa, hora, día de la semana, zona horaria y timestamp Unix.".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {}
@@ -738,6 +789,59 @@ pub fn get_all_tool_definitions() -> Vec<MCPTool> {
         MCPTool {
             name: "get_workspace_path".to_string(),
             description: "Obtiene la ruta del directorio de trabajo actual".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
+        // ==================== BÚSQUEDA SEMÁNTICA ====================
+        MCPTool {
+            name: "find_similar_notes".to_string(),
+            description: "Encuentra notas similares a una nota específica. Útil para descubrir contenido relacionado o 'notas que podrían interesarte'.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "note_path": {
+                        "type": "string",
+                        "description": "Ruta de la nota de referencia"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Número máximo de resultados (default: 10)"
+                    },
+                    "min_similarity": {
+                        "type": "number",
+                        "description": "Similitud mínima 0.0-1.0 (default: 0.5)"
+                    }
+                },
+                "required": ["note_path"]
+            }),
+        },
+        MCPTool {
+            name: "get_embedding_stats".to_string(),
+            description: "Obtiene estadísticas del índice de embeddings: notas indexadas, chunks totales, tokens procesados.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
+        MCPTool {
+            name: "index_note".to_string(),
+            description: "Indexa o re-indexa una nota específica en el sistema de búsqueda semántica.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "note_path": {
+                        "type": "string",
+                        "description": "Ruta de la nota a indexar"
+                    }
+                },
+                "required": ["note_path"]
+            }),
+        },
+        MCPTool {
+            name: "reindex_all_notes".to_string(),
+            description: "Re-indexa todas las notas en el sistema de búsqueda semántica. Operación costosa, usar solo cuando sea necesario.".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {}

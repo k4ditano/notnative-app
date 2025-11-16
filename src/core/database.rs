@@ -50,6 +50,7 @@ pub struct SearchResult {
     pub snippet: String,
     pub relevance: f32,
     pub matched_tags: Vec<String>,
+    pub similarity: Option<f32>, // Para búsqueda semántica
 }
 
 /// Query de búsqueda con filtros opcionales
@@ -78,7 +79,7 @@ impl std::fmt::Debug for NotesDatabase {
 
 impl NotesDatabase {
     /// Versión actual del esquema
-    const SCHEMA_VERSION: i32 = 1;
+    const SCHEMA_VERSION: i32 = 3;
 
     /// Crear o abrir base de datos en la ruta especificada
     pub fn new(path: &Path) -> Result<Self> {
@@ -94,8 +95,14 @@ impl NotesDatabase {
             path: path.to_path_buf(),
         };
 
-        db.initialize_schema()?;
+        // Primero crear tabla de versión si no existe
+        db.ensure_version_table()?;
+
+        // Verificar versión actual y migrar si es necesario
         db.migrate_if_needed()?;
+
+        // Inicializar esquema completo
+        db.initialize_schema()?;
 
         Ok(db)
     }
@@ -110,15 +117,37 @@ impl NotesDatabase {
         }
     }
 
+    /// Asegurar que existe la tabla de versión
+    fn ensure_version_table(&mut self) -> Result<()> {
+        self.conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY
+            );
+            "#,
+        )?;
+
+        // Verificar si hay una versión registrada
+        let version_exists: bool = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM schema_version", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map(|count| count > 0)?;
+
+        // Si no hay versión, insertar la versión 1 (asumimos base de datos nueva o antigua)
+        if !version_exists {
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (1)", [])?;
+        }
+
+        Ok(())
+    }
+
     /// Inicializar esquema de base de datos
     fn initialize_schema(&mut self) -> Result<()> {
         self.conn.execute_batch(
             r#"
-            -- Tabla de versión del esquema
-            CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER PRIMARY KEY
-            );
-            
             -- Tabla principal de notas
             CREATE TABLE IF NOT EXISTS notes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -197,18 +226,24 @@ impl NotesDatabase {
             CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
             CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages(created_at);
             CREATE INDEX IF NOT EXISTS idx_chat_context_session ON chat_context_notes(session_id);
+            
+            -- Tabla de embeddings para búsqueda semántica (v2)
+            CREATE TABLE IF NOT EXISTS note_embeddings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                note_path TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                chunk_text TEXT NOT NULL,
+                embedding BLOB NOT NULL,
+                token_count INTEGER DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(note_path, chunk_index)
+            );
+            
+            -- Índices para embeddings
+            CREATE INDEX IF NOT EXISTS idx_embeddings_note ON note_embeddings(note_path);
+            CREATE INDEX IF NOT EXISTS idx_embeddings_updated ON note_embeddings(updated_at DESC);
             "#,
-        )?;
-
-        // Insertar versión del esquema si no existe (por separado porque execute_batch no soporta params)
-        self.conn.execute(
-            "INSERT OR IGNORE INTO schema_version (version) VALUES (?1)",
-            params![Self::SCHEMA_VERSION],
-        )?;
-
-        self.conn.execute(
-            "UPDATE schema_version SET version = ?1",
-            params![Self::SCHEMA_VERSION],
         )?;
 
         Ok(())
@@ -226,9 +261,82 @@ impl NotesDatabase {
                 current_version,
                 Self::SCHEMA_VERSION
             );
-            // Aquí irían las migraciones futuras
+
+            // Migración v1 -> v2: Agregar tabla de embeddings
+            if current_version < 2 {
+                self.migrate_to_v2()?;
+            }
+            
+            // Migración v2 -> v3: Agregar tabla de caché de queries
+            if current_version < 3 {
+                self.migrate_to_v3()?;
+            }
         }
 
+        Ok(())
+    }
+
+    /// Migración a versión 2: Agregar tabla de embeddings
+    fn migrate_to_v2(&mut self) -> Result<()> {
+        println!("Aplicando migración v2: Agregando tabla de embeddings");
+
+        self.conn.execute_batch(
+            r#"
+            -- Tabla de embeddings para búsqueda semántica
+            CREATE TABLE IF NOT EXISTS note_embeddings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                note_path TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                chunk_text TEXT NOT NULL,
+                embedding BLOB NOT NULL,
+                token_count INTEGER DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(note_path, chunk_index)
+            );
+            
+            -- Índices para mejorar performance
+            CREATE INDEX IF NOT EXISTS idx_embeddings_note ON note_embeddings(note_path);
+            CREATE INDEX IF NOT EXISTS idx_embeddings_updated ON note_embeddings(updated_at DESC);
+            "#,
+        )?;
+
+        // Actualizar versión usando REPLACE (elimina e inserta)
+        self.conn
+            .execute("REPLACE INTO schema_version (version) VALUES (2)", [])?;
+
+        println!("Migración v2 completada");
+        Ok(())
+    }
+
+    /// Migración a versión 3: Agregar tabla de caché de queries
+    fn migrate_to_v3(&mut self) -> Result<()> {
+        println!("Aplicando migración v3: Agregando tabla de caché de queries");
+
+        self.conn.execute_batch(
+            r#"
+            -- Tabla de caché para queries de búsqueda semántica
+            CREATE TABLE IF NOT EXISTS query_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                query_text TEXT NOT NULL,
+                query_hash TEXT NOT NULL UNIQUE,
+                embedding BLOB NOT NULL,
+                hits INTEGER DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                last_used_at INTEGER NOT NULL
+            );
+            
+            -- Índice para búsquedas rápidas por hash
+            CREATE INDEX IF NOT EXISTS idx_query_hash ON query_cache(query_hash);
+            CREATE INDEX IF NOT EXISTS idx_query_last_used ON query_cache(last_used_at DESC);
+            "#,
+        )?;
+
+        // Actualizar versión
+        self.conn
+            .execute("REPLACE INTO schema_version (version) VALUES (3)", [])?;
+
+        println!("Migración v3 completada");
         Ok(())
     }
 
@@ -303,23 +411,64 @@ impl NotesDatabase {
 
     /// Eliminar una nota de la base de datos
     pub fn delete_note(&self, name: &str) -> Result<()> {
-        let note_id: Option<i64> = self
+        let note_data: Option<(i64, String)> = self
             .conn
             .query_row(
-                "SELECT id FROM notes WHERE name = ?1",
+                "SELECT id, path FROM notes WHERE name = ?1",
                 params![name],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
 
-        if let Some(id) = note_id {
+        if let Some((id, path)) = note_data {
+            // Eliminar de tabla principal
             self.conn
                 .execute("DELETE FROM notes WHERE id = ?1", params![id])?;
+
+            // Eliminar de FTS
             self.conn
                 .execute("DELETE FROM notes_fts WHERE rowid = ?1", params![id])?;
+
+            // Eliminar embeddings asociados
+            self.conn.execute(
+                "DELETE FROM note_embeddings WHERE note_path = ?1",
+                params![path],
+            )?;
+
+            println!("🗑️ Nota '{}' eliminada de BD (incluidos embeddings)", name);
         }
 
         Ok(())
+    }
+
+    /// Limpiar notas huérfanas (que están en BD pero no existen en el filesystem)
+    pub fn cleanup_orphaned_notes(&self, existing_paths: &[String]) -> Result<usize> {
+        // Obtener todas las notas en BD
+        let all_notes: Vec<(String, String)> = self
+            .conn
+            .prepare("SELECT name, path FROM notes")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let mut deleted_count = 0;
+
+        for (name, path) in all_notes {
+            // Verificar si el path existe en la lista de archivos actuales
+            if !existing_paths.contains(&path) {
+                println!("🧹 Limpiando nota huérfana: '{}' (path: {})", name, path);
+                self.delete_note(&name)?;
+                deleted_count += 1;
+            }
+        }
+
+        if deleted_count > 0 {
+            println!(
+                "✅ Limpieza completada: {} notas huérfanas eliminadas",
+                deleted_count
+            );
+        }
+
+        Ok(deleted_count)
     }
 
     /// Obtener metadata de una nota
@@ -332,6 +481,33 @@ impl NotesDatabase {
             FROM notes WHERE name = ?1
             "#,
                 params![name],
+                |row| {
+                    Ok(NoteMetadata {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        path: row.get(2)?,
+                        folder: row.get(3)?,
+                        order_index: row.get(4)?,
+                        created_at: DateTime::from_timestamp(row.get(5)?, 0).unwrap(),
+                        updated_at: DateTime::from_timestamp(row.get(6)?, 0).unwrap(),
+                    })
+                },
+            )
+            .optional()?;
+
+        Ok(result)
+    }
+
+    /// Obtener una nota por su ruta
+    pub fn get_note_by_path(&self, path: &str) -> Result<Option<NoteMetadata>> {
+        let result = self
+            .conn
+            .query_row(
+                r#"
+            SELECT id, name, path, folder, order_index, created_at, updated_at
+            FROM notes WHERE path = ?1
+            "#,
+                params![path],
                 |row| {
                     Ok(NoteMetadata {
                         id: row.get(0)?,
@@ -399,6 +575,7 @@ impl NotesDatabase {
                     snippet: String::new(),
                     relevance: 0.0,
                     matched_tags: vec![],
+                    similarity: None,
                 })
                 .collect();
             return Ok(notes);
@@ -509,6 +686,7 @@ impl NotesDatabase {
                         snippet: row.get(3)?,
                         relevance: row.get::<_, f64>(4)? as f32,
                         matched_tags: vec![tag_name.clone()],
+                        similarity: None,
                     })
                 })?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -550,6 +728,7 @@ impl NotesDatabase {
                     snippet: row.get(3)?,
                     relevance: row.get::<_, f64>(4)? as f32,
                     matched_tags: vec![],
+                    similarity: None,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -812,6 +991,381 @@ impl NotesDatabase {
         self.conn.execute("DELETE FROM chat_sessions", [])?;
         Ok(())
     }
+
+    // ============================================================================
+    // EMBEDDING MANAGEMENT
+    // ============================================================================
+
+    /// Almacenar el embedding de un chunk de nota
+    pub fn insert_embedding(
+        &self,
+        note_path: &str,
+        chunk_index: usize,
+        chunk_text: &str,
+        embedding: &[f32],
+        token_count: usize,
+    ) -> Result<()> {
+        let now = Utc::now().timestamp();
+
+        // Convertir el vector de f32 a bytes
+        let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+        self.conn.execute(
+            r#"
+            INSERT INTO note_embeddings (note_path, chunk_index, chunk_text, embedding, token_count, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT(note_path, chunk_index) DO UPDATE SET
+                chunk_text = excluded.chunk_text,
+                embedding = excluded.embedding,
+                token_count = excluded.token_count,
+                updated_at = excluded.updated_at
+            "#,
+            params![note_path, chunk_index as i64, chunk_text, embedding_bytes, token_count as i64, now, now],
+        )?;
+
+        Ok(())
+    }
+
+    /// Obtener todos los embeddings de una nota específica
+    pub fn get_embeddings_by_note(
+        &self,
+        note_path: &str,
+    ) -> Result<Vec<(i64, usize, String, Vec<f32>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, chunk_index, chunk_text, embedding FROM note_embeddings WHERE note_path = ?1 ORDER BY chunk_index"
+        )?;
+
+        let embeddings = stmt
+            .query_map(params![note_path], |row| {
+                let id: i64 = row.get(0)?;
+                let chunk_index: i64 = row.get(1)?;
+                let chunk_text: String = row.get(2)?;
+                let embedding_bytes: Vec<u8> = row.get(3)?;
+
+                // Convertir bytes a vector de f32
+                let embedding: Vec<f32> = embedding_bytes
+                    .chunks_exact(4)
+                    .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                    .collect();
+
+                Ok((id, chunk_index as usize, chunk_text, embedding))
+            })?
+            .collect::<SqliteResult<Vec<_>>>()?;
+
+        Ok(embeddings)
+    }
+
+    /// Obtener todos los embeddings de todas las notas (para búsqueda semántica)
+    pub fn get_all_embeddings(&self) -> Result<Vec<(String, usize, String, Vec<f32>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT note_path, chunk_index, chunk_text, embedding FROM note_embeddings ORDER BY note_path, chunk_index"
+        )?;
+
+        let embeddings = stmt
+            .query_map([], |row| {
+                let note_path: String = row.get(0)?;
+                let chunk_index: i64 = row.get(1)?;
+                let chunk_text: String = row.get(2)?;
+                let embedding_bytes: Vec<u8> = row.get(3)?;
+
+                // Convertir bytes a vector de f32
+                let embedding: Vec<f32> = embedding_bytes
+                    .chunks_exact(4)
+                    .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                    .collect();
+
+                Ok((note_path, chunk_index as usize, chunk_text, embedding))
+            })?
+            .collect::<SqliteResult<Vec<_>>>()?;
+
+        Ok(embeddings)
+    }
+
+    /// Eliminar todos los embeddings de una nota
+    pub fn delete_embeddings_by_note(&self, note_path: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM note_embeddings WHERE note_path = ?1",
+            params![note_path],
+        )?;
+        Ok(())
+    }
+
+    /// Obtener la fecha de actualización del embedding de una nota
+    pub fn get_embedding_timestamp(&self, note_path: &str) -> Result<Option<DateTime<Utc>>> {
+        let result = self.conn.query_row(
+            "SELECT MAX(updated_at) FROM note_embeddings WHERE note_path = ?1",
+            params![note_path],
+            |row| row.get::<_, Option<i64>>(0),
+        );
+
+        match result {
+            Ok(Some(ts)) => Ok(Some(DateTime::from_timestamp(ts, 0).unwrap())),
+            Ok(None) => Ok(None),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Contar el número total de embeddings almacenados
+    pub fn count_embeddings(&self) -> Result<usize> {
+        let count: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM note_embeddings", [], |row| row.get(0))?;
+        Ok(count as usize)
+    }
+
+    /// Contar el número de notas con embeddings
+    pub fn count_notes_with_embeddings(&self) -> Result<usize> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(DISTINCT note_path) FROM note_embeddings",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    /// Obtener estadísticas de embeddings
+    pub fn get_embedding_stats(&self) -> Result<(usize, usize, usize)> {
+        let total_notes = self.count_notes_with_embeddings()?;
+        let total_chunks = self.count_embeddings()?;
+        let total_tokens: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(token_count), 0) FROM note_embeddings",
+            [],
+            |row| row.get(0),
+        )?;
+
+        Ok((total_notes, total_chunks, total_tokens as usize))
+    }
+
+    // ===== Query Cache Methods =====
+
+    /// Obtener embedding de query desde caché
+    pub fn get_cached_query_embedding(&self, query_text: &str) -> Result<Option<Vec<f32>>> {
+        use sha2::{Sha256, Digest};
+        
+        // Calcular hash de la query
+        let mut hasher = Sha256::new();
+        hasher.update(query_text.as_bytes());
+        let query_hash = format!("{:x}", hasher.finalize());
+
+        // Buscar en caché
+        let result: Option<(Vec<u8>, i64)> = self.conn.query_row(
+            "SELECT embedding, id FROM query_cache WHERE query_hash = ?1",
+            params![query_hash],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?;
+
+        if let Some((embedding_blob, cache_id)) = result {
+            // Incrementar contador de hits
+            let now = Utc::now().timestamp();
+            self.conn.execute(
+                "UPDATE query_cache SET hits = hits + 1, last_used_at = ?1 WHERE id = ?2",
+                params![now, cache_id],
+            )?;
+
+            // Deserializar embedding
+            let embedding: Vec<f32> = bincode::deserialize(&embedding_blob)
+                .map_err(|e| DatabaseError::Sqlite(rusqlite::Error::InvalidQuery))?;
+            
+            Ok(Some(embedding))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Guardar embedding de query en caché
+    pub fn cache_query_embedding(&self, query_text: &str, embedding: &[f32]) -> Result<()> {
+        use sha2::{Sha256, Digest};
+        
+        let mut hasher = Sha256::new();
+        hasher.update(query_text.as_bytes());
+        let query_hash = format!("{:x}", hasher.finalize());
+
+        // Serializar embedding
+        let embedding_blob = bincode::serialize(embedding)
+            .map_err(|e| DatabaseError::Sqlite(rusqlite::Error::InvalidQuery))?;
+
+        let now = Utc::now().timestamp();
+
+        // Insertar o actualizar caché
+        self.conn.execute(
+            r#"
+            INSERT INTO query_cache (query_text, query_hash, embedding, hits, created_at, last_used_at)
+            VALUES (?1, ?2, ?3, 1, ?4, ?5)
+            ON CONFLICT(query_hash) DO UPDATE SET
+                hits = hits + 1,
+                last_used_at = excluded.last_used_at
+            "#,
+            params![query_text, query_hash, embedding_blob, now, now],
+        )?;
+
+        Ok(())
+    }
+
+    /// Limpiar queries antiguas del caché
+    pub fn clean_old_cache(&self, days: i64) -> Result<usize> {
+        let cutoff = Utc::now().timestamp() - (days * 24 * 60 * 60);
+        
+        let deleted = self.conn.execute(
+            "DELETE FROM query_cache WHERE last_used_at < ?1",
+            params![cutoff],
+        )?;
+
+        Ok(deleted)
+    }
+
+    /// Obtener estadísticas del caché
+    pub fn get_cache_stats(&self) -> Result<(usize, usize, f64)> {
+        let total_queries: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM query_cache",
+            [],
+            |row| row.get(0),
+        )?;
+
+        let total_hits: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(hits), 0) FROM query_cache",
+            [],
+            |row| row.get(0),
+        )?;
+
+        let hit_rate = if total_queries > 0 {
+            total_hits as f64 / total_queries as f64
+        } else {
+            0.0
+        };
+
+        Ok((total_queries as usize, total_hits as usize, hit_rate))
+    }
+
+    /// Obtener expansión de query desde caché
+    pub fn get_cached_query_expansion(&self, query_text: &str) -> Result<Option<String>> {
+        use sha2::{Sha256, Digest};
+        
+        let mut hasher = Sha256::new();
+        hasher.update(format!("expansion:{}", query_text).as_bytes());
+        let query_hash = format!("{:x}", hasher.finalize());
+
+        let result: Option<String> = self.conn.query_row(
+            "SELECT query_text FROM query_cache WHERE query_hash = ?1 AND embedding IS NULL",
+            params![query_hash],
+            |row| row.get(0),
+        ).optional()?;
+
+        if result.is_some() {
+            // Actualizar last_used
+            let now = Utc::now().timestamp();
+            self.conn.execute(
+                "UPDATE query_cache SET hits = hits + 1, last_used_at = ?1 WHERE query_hash = ?2",
+                params![now, query_hash],
+            )?;
+        }
+
+        Ok(result)
+    }
+
+    /// Guardar expansión de query en caché
+    pub fn cache_query_expansion(&self, original_query: &str, expanded_query: &str) -> Result<()> {
+        use sha2::{Sha256, Digest};
+        
+        let mut hasher = Sha256::new();
+        hasher.update(format!("expansion:{}", original_query).as_bytes());
+        let query_hash = format!("{:x}", hasher.finalize());
+
+        let now = Utc::now().timestamp();
+
+        // Guardar la expansión en el campo query_text, embedding NULL
+        self.conn.execute(
+            r#"
+            INSERT INTO query_cache (query_text, query_hash, embedding, hits, created_at, last_used_at)
+            VALUES (?1, ?2, NULL, 1, ?3, ?4)
+            ON CONFLICT(query_hash) DO UPDATE SET
+                hits = hits + 1,
+                last_used_at = excluded.last_used_at
+            "#,
+            params![expanded_query, query_hash, now, now],
+        )?;
+
+        Ok(())
+    }
+
+    /// Eliminar todas las notas de una carpeta de la BD
+    pub fn delete_notes_in_folder(&self, folder_path: &str) -> Result<usize> {
+        // Obtener todas las notas en esa carpeta
+        let notes: Vec<(i64, String, String)> = self
+            .conn
+            .prepare("SELECT id, name, path FROM notes WHERE folder = ?1 OR folder LIKE ?2")?
+            .query_map(params![folder_path, format!("{}/%", folder_path)], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<SqliteResult<Vec<_>>>()?;
+
+        let count = notes.len();
+
+        for (id, name, path) in notes {
+            // Eliminar de tabla principal
+            self.conn.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
+
+            // Eliminar de FTS
+            self.conn.execute("DELETE FROM notes_fts WHERE rowid = ?1", params![id])?;
+
+            // Eliminar embeddings asociados
+            self.conn.execute(
+                "DELETE FROM note_embeddings WHERE note_path = ?1",
+                params![path],
+            )?;
+
+            println!("🗑️ Nota '{}' eliminada de BD (carpeta: {})", name, folder_path);
+        }
+
+        if count > 0 {
+            println!("🗑️ Total de {} notas eliminadas de la carpeta '{}'", count, folder_path);
+        }
+
+        Ok(count)
+    }
+
+    /// Actualizar el campo folder de todas las notas en una carpeta (para rename/move)
+    pub fn update_notes_folder(&self, old_folder: &str, new_folder: &str) -> Result<usize> {
+        // Actualizar notas directamente en la carpeta
+        let updated = self.conn.execute(
+            "UPDATE notes SET folder = ?1 WHERE folder = ?2",
+            params![new_folder, old_folder],
+        )?;
+
+        // Actualizar notas en subcarpetas
+        let pattern = format!("{}/%", old_folder);
+        let replacement_prefix = format!("{}/", new_folder);
+        let old_prefix = format!("{}/", old_folder);
+
+        // Para subcarpetas, necesitamos reemplazar el prefijo
+        let subcarpetas: Vec<(i64, String)> = self
+            .conn
+            .prepare("SELECT id, folder FROM notes WHERE folder LIKE ?1")?
+            .query_map(params![pattern], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<SqliteResult<Vec<_>>>()?;
+
+        let subcarpetas_count = subcarpetas.len();
+
+        for (id, old_path) in subcarpetas {
+            if let Some(suffix) = old_path.strip_prefix(&old_prefix) {
+                let new_path = format!("{}{}", replacement_prefix, suffix);
+                self.conn.execute(
+                    "UPDATE notes SET folder = ?1 WHERE id = ?2",
+                    params![new_path, id],
+                )?;
+            }
+        }
+
+        let total = updated + subcarpetas_count;
+        if total > 0 {
+            println!(
+                "📝 {} notas actualizadas: carpeta '{}' → '{}'",
+                total, old_folder, new_folder
+            );
+        }
+
+        Ok(total)
+    }
 }
 
 #[cfg(test)]
@@ -874,6 +1428,96 @@ mod tests {
 
         let all_tags = db.get_tags().unwrap();
         assert_eq!(all_tags.len(), 2);
+
+        // Cleanup
+        std::fs::remove_file(db_path).ok();
+    }
+
+    #[test]
+    fn test_embeddings() {
+        let temp_dir = std::env::temp_dir();
+        let db_path = temp_dir.join("test_notes_embeddings.db");
+
+        let db = NotesDatabase::new(&db_path).unwrap();
+
+        // Crear un embedding de prueba (dimensión 1024 como qwen)
+        let embedding: Vec<f32> = (0..1024).map(|i| (i as f32) / 1024.0).collect();
+
+        // Insertar embedding
+        db.insert_embedding(
+            "/path/to/note.md",
+            0,
+            "Este es el primer chunk de texto",
+            &embedding,
+            50,
+        )
+        .unwrap();
+
+        // Insertar segundo chunk
+        let embedding2: Vec<f32> = (0..1024).map(|i| ((i + 512) as f32) / 1024.0).collect();
+        db.insert_embedding(
+            "/path/to/note.md",
+            1,
+            "Este es el segundo chunk de texto",
+            &embedding2,
+            45,
+        )
+        .unwrap();
+
+        // Verificar que se insertaron correctamente
+        let embeddings = db.get_embeddings_by_note("/path/to/note.md").unwrap();
+        assert_eq!(embeddings.len(), 2);
+        assert_eq!(embeddings[0].1, 0); // chunk_index
+        assert_eq!(embeddings[0].2, "Este es el primer chunk de texto");
+        assert_eq!(embeddings[0].3.len(), 1024); // dimensión del embedding
+        assert_eq!(embeddings[1].1, 1);
+
+        // Verificar timestamp
+        let timestamp = db.get_embedding_timestamp("/path/to/note.md").unwrap();
+        assert!(timestamp.is_some());
+
+        // Verificar estadísticas
+        let (notes_count, chunks_count, tokens_count) = db.get_embedding_stats().unwrap();
+        assert_eq!(notes_count, 1);
+        assert_eq!(chunks_count, 2);
+        assert_eq!(tokens_count, 95); // 50 + 45
+
+        // Obtener todos los embeddings
+        let all_embeddings = db.get_all_embeddings().unwrap();
+        assert_eq!(all_embeddings.len(), 2);
+
+        // Eliminar embeddings
+        db.delete_embeddings_by_note("/path/to/note.md").unwrap();
+        let embeddings_after = db.get_embeddings_by_note("/path/to/note.md").unwrap();
+        assert_eq!(embeddings_after.len(), 0);
+
+        // Cleanup
+        std::fs::remove_file(db_path).ok();
+    }
+
+    #[test]
+    fn test_embedding_update() {
+        let temp_dir = std::env::temp_dir();
+        let db_path = temp_dir.join("test_notes_embeddings_update.db");
+
+        let db = NotesDatabase::new(&db_path).unwrap();
+
+        let embedding1: Vec<f32> = (0..1024).map(|_| 0.5).collect();
+        let embedding2: Vec<f32> = (0..1024).map(|_| 0.9).collect();
+
+        // Insertar embedding inicial
+        db.insert_embedding("/path/to/note.md", 0, "Texto original", &embedding1, 30)
+            .unwrap();
+
+        // Actualizar el mismo chunk (misma nota y chunk_index)
+        db.insert_embedding("/path/to/note.md", 0, "Texto actualizado", &embedding2, 35)
+            .unwrap();
+
+        // Verificar que se actualizó y no se duplicó
+        let embeddings = db.get_embeddings_by_note("/path/to/note.md").unwrap();
+        assert_eq!(embeddings.len(), 1);
+        assert_eq!(embeddings[0].2, "Texto actualizado");
+        assert_eq!(embeddings[0].3[0], 0.9); // Verificar que el embedding cambió
 
         // Cleanup
         std::fs::remove_file(db_path).ok();

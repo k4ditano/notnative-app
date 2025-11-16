@@ -22,6 +22,7 @@
     unused_imports
 )]
 
+mod ai;
 mod ai_chat;
 mod ai_client;
 mod app;

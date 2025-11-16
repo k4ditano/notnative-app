@@ -323,6 +323,183 @@ Lista todos los tags usados en todas las notas.
 
 ---
 
+### 🧠 semantic_search
+Búsqueda por similitud semántica (significado conceptual, no keywords).
+
+**⚠️ Requiere**: Embeddings habilitado y API key de OpenRouter configurada
+
+**Parámetros:**
+```json
+{
+  "query": "string (requerido)",          // Pregunta o concepto a buscar
+  "limit": "integer (opcional)",          // Max resultados (default: 10)
+  "min_similarity": "float (opcional)",   // Umbral 0.0-1.0 (default: 0.7)
+  "folder": "string (opcional)"           // Filtrar por carpeta
+}
+```
+
+**Ejemplo:**
+```json
+{
+  "query": "¿Cómo implementar autenticación con OAuth?",
+  "limit": 5,
+  "min_similarity": 0.75,
+  "folder": "Backend"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "message": "✓ 5 resultados encontrados para '...'",
+    "query": "¿Cómo implementar autenticación con OAuth?",
+    "results": [
+      {
+        "note_path": "Backend/Autenticación.md",
+        "chunk_index": 2,
+        "similarity": 0.89,
+        "snippet": "OAuth 2.0 es un protocolo..."
+      }
+    ],
+    "total": 5
+  }
+}
+```
+
+---
+
+### 🔗 find_similar_notes
+Encuentra notas similares a una nota específica.
+
+**⚠️ Requiere**: Embeddings habilitado
+
+**Parámetros:**
+```json
+{
+  "note_path": "string (requerido)",     // Ruta de la nota de referencia
+  "limit": "integer (opcional)",         // Max resultados (default: 10)
+  "min_similarity": "float (opcional)"   // Umbral 0.0-1.0 (default: 0.7)
+}
+```
+
+**Ejemplo:**
+```json
+{
+  "note_path": "Backend/API REST.md",
+  "limit": 5
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "message": "✓ 3 notas similares a 'Backend/API REST.md'",
+    "results": [
+      {
+        "note_path": "Backend/GraphQL.md",
+        "similarity": 0.85,
+        "chunk_count": 4,
+        "avg_similarity": 0.78,
+        "best_snippet": "GraphQL es un lenguaje..."
+      }
+    ],
+    "total": 3
+  }
+}
+```
+
+---
+
+### 📊 get_embedding_stats
+Obtiene estadísticas del índice de embeddings.
+
+**Parámetros:**
+```json
+{}  // Sin parámetros
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "message": "✓ Estadísticas del índice de embeddings",
+    "stats": {
+      "total_notes": 45,
+      "total_chunks": 312,
+      "total_tokens": 89456,
+      "model": "qwen/qwen2.5-embedding-8b",
+      "dimension": 1024,
+      "max_chunk_tokens": 512,
+      "overlap_tokens": 50
+    }
+  }
+}
+```
+
+---
+
+### 🔄 index_note
+Indexa o re-indexa una nota específica para búsqueda semántica.
+
+**Parámetros:**
+```json
+{
+  "note_path": "string (requerido)"  // Ruta de la nota a indexar
+}
+```
+
+**Ejemplo:**
+```json
+{
+  "note_path": "Ideas/Nueva Idea.md"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "message": "✓ Nota 'Ideas/Nueva Idea.md' indexada: 8 chunks",
+    "note_path": "Ideas/Nueva Idea.md",
+    "total_chunks": 8
+  }
+}
+```
+
+---
+
+### 🔄 reindex_all_notes
+Re-indexa todas las notas del workspace.
+
+**⚠️ Advertencia**: Operación costosa, usar solo cuando sea necesario
+
+**Parámetros:**
+```json
+{}  // Sin parámetros
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "message": "✓ Re-indexación completa: 45 notas, 312 chunks",
+    "total_notes": 45,
+    "total_chunks": 312,
+    "indexed_notes": 45,
+    "errors": []
+  }
+}
+```
+
+---
+
 ## Organización
 
 ### 📁 create_folder
