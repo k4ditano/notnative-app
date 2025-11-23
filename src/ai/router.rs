@@ -35,6 +35,11 @@ impl RouterAgent {
     /// Crea un nuevo router con los agentes predefinidos
     pub fn new(llm: Arc<dyn AIClient>) -> Self {
         let mut agents = HashMap::new();
+
+        {
+            agents.insert("rig".to_string(), Agent::rig_agent());
+        }
+
         agents.insert("create".to_string(), Agent::create_agent());
         agents.insert("search".to_string(), Agent::search_agent());
         agents.insert("analyze".to_string(), Agent::analyze_agent());
@@ -91,62 +96,11 @@ impl RouterAgent {
     }
 
     /// Clasifica la intención del usuario usando el LLM
-    async fn classify_intent(&self, task: &str) -> Result<IntentClassification> {
-        let classification_prompt = format!(
-            r#"Clasifica esta tarea del usuario en UNA de estas categorías:
-
-1. CREATE - Crear, modificar, actualizar o editar notas
-2. SEARCH - Buscar, encontrar, listar o explorar notas
-3. ANALYZE - Analizar, revisar, obtener estadísticas o examinar contenido
-4. EXECUTE - Tareas complejas, preguntas sobre capacidades/herramientas, múltiples pasos
-5. CHAT - Conversación casual, saludos simples
-
-Tarea del usuario: "{}"
-
-Responde SOLO con UNA palabra: CREATE, SEARCH, ANALYZE, EXECUTE o CHAT
-
-Ejemplos:
-- "Crea una nota sobre Rust" → CREATE
-- "Busca notas sobre Python" → SEARCH
-- "¿Cuántas palabras tiene esta nota?" → ANALYZE
-- "¿Qué herramientas tienes?" → EXECUTE
-- "Busca notas sobre X y crea un resumen" → EXECUTE
-- "Hola" → CHAT
-- "¿Cómo estás?" → CHAT
-"#,
-            task
-        );
-
-        let messages = vec![ChatMessage {
-            role: MessageRole::User,
-            content: classification_prompt,
-            timestamp: chrono::Utc::now(),
-            context_notes: Vec::new(),
-        }];
-
-        let response = self.llm.send_message(&messages, "").await?;
-
-        // Parsear la respuesta
-        let response_upper = response.to_uppercase().trim().to_string();
-        let agent_type = if response_upper.contains("CREATE") {
-            "create"
-        } else if response_upper.contains("SEARCH") {
-            "search"
-        } else if response_upper.contains("ANALYZE") {
-            "analyze"
-        } else if response_upper.contains("EXECUTE") {
-            "execute"
-        } else if response_upper.contains("CHAT") {
-            "chat"
-        } else {
-            // Por defecto, usar el agente más potente
-            println!("⚠️ No se pudo clasificar, usando MultiStepAgent por defecto");
-            "execute"
-        };
-
+    async fn classify_intent(&self, _task: &str) -> Result<IntentClassification> {
+        // RIG es ahora el agente predeterminado para todas las tareas
         Ok(IntentClassification {
-            agent_type: agent_type.to_string(),
-            confidence: 1.0, // TODO: Implementar cálculo real de confianza
+            agent_type: "rig".to_string(),
+            confidence: 1.0,
         })
     }
 }

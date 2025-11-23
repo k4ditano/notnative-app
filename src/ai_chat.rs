@@ -99,9 +99,20 @@ impl ChatSession {
 
     /// Adjunta una nota al contexto
     pub fn attach_note(&mut self, note: NoteFile) {
-        // Solo agregar si no está ya en la lista
-        if !self.attached_notes.iter().any(|n| n.name() == note.name()) {
-            self.attached_notes.push(note);
+        // Si ya existe, la quitamos para moverla al final (más reciente)
+        if let Some(pos) = self
+            .attached_notes
+            .iter()
+            .position(|n| n.name() == note.name())
+        {
+            self.attached_notes.remove(pos);
+        }
+
+        self.attached_notes.push(note);
+
+        // Limitar a las últimas 5 notas para evitar acumulación excesiva
+        while self.attached_notes.len() > 5 {
+            self.attached_notes.remove(0);
         }
     }
 

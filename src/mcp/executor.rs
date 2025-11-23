@@ -3,6 +3,7 @@ use serde_json::json;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::core::{NotesConfig, NotesDatabase, NotesDirectory};
 use crate::i18n::I18n;
@@ -15,6 +16,9 @@ pub struct MCPToolExecutor {
     notes_db: Rc<RefCell<NotesDatabase>>,
     notes_config: Rc<RefCell<NotesConfig>>,
     i18n: Rc<RefCell<I18n>>,
+    note_memory: Rc<
+        RefCell<Option<Arc<crate::ai::memory::NoteMemory<rig::providers::openai::EmbeddingModel>>>>,
+    >,
 }
 
 impl MCPToolExecutor {
@@ -29,7 +33,19 @@ impl MCPToolExecutor {
             notes_db,
             notes_config,
             i18n,
+            note_memory: Rc::new(RefCell::new(None)),
         }
+    }
+
+    pub fn set_note_memory(
+        &mut self,
+        memory: Rc<
+            RefCell<
+                Option<Arc<crate::ai::memory::NoteMemory<rig::providers::openai::EmbeddingModel>>>,
+            >,
+        >,
+    ) {
+        self.note_memory = memory;
     }
 
     /// Ejecuta una llamada de herramienta y devuelve el resultado
@@ -151,9 +167,11 @@ impl MCPToolExecutor {
                 note_name.as_deref(),
             ),
 
-            MCPToolCall::ListReminders { status, limit } => {
-                self.list_reminders(status.as_deref(), limit)
-            }
+            MCPToolCall::ListReminders {
+                status,
+                days,
+                limit,
+            } => self.list_reminders(status.as_deref(), days, limit),
 
             MCPToolCall::CompleteReminder { id } => self.complete_reminder(id),
 
@@ -1313,11 +1331,11 @@ impl MCPToolExecutor {
         std::fs::rename(&old_path, &new_path)?;
 
         // Actualizar todas las notas de esta carpeta en la BD
-        if let Err(e) = self
-            .notes_db
-            .borrow()
-            .update_notes_folder(old_name, new_name)
-        {
+        if let Err(e) = self.notes_db.borrow().update_notes_folder(
+            old_name,
+            new_name,
+            self.notes_dir.root().to_str().unwrap_or(""),
+        ) {
             eprintln!("⚠️ Error actualizando carpeta en BD: {}", e);
         }
 
@@ -1378,11 +1396,11 @@ impl MCPToolExecutor {
         std::fs::rename(&old_path, &new_path)?;
 
         // Actualizar todas las notas de esta carpeta en la BD
-        if let Err(e) = self
-            .notes_db
-            .borrow()
-            .update_notes_folder(name, &new_folder_path)
-        {
+        if let Err(e) = self.notes_db.borrow().update_notes_folder(
+            name,
+            &new_folder_path,
+            self.notes_dir.root().to_str().unwrap_or(""),
+        ) {
             eprintln!("⚠️ Error actualizando carpeta en BD: {}", e);
         }
 
@@ -1579,50 +1597,23 @@ impl MCPToolExecutor {
         min_similarity: Option<f32>,
         folder: Option<String>,
     ) -> Result<MCPToolResult> {
-        use crate::core::{EmbeddingClient, SearchOptions, SemanticSearch};
-
-        // Obtener configuración de embeddings del NotesConfig real
-        let mut embedding_config = self.notes_config.borrow().get_embedding_config().clone();
-
-        // Si embeddings no tiene API key, usar la de AI config
-        if embedding_config.api_key.is_none() {
-            embedding_config.api_key = self.notes_config.borrow().get_ai_config().api_key.clone();
-        }
-
-        // Verificar si embeddings está habilitado y configurado
-        if !embedding_config.enabled {
-            return Ok(MCPToolResult::error(
-                "Embeddings no habilitado. Actívalo en Configuración > Embeddings.".to_string(),
-            ));
-        }
-
-        if !embedding_config.is_valid() {
-            return Ok(MCPToolResult::error(
-                "Embeddings no configurado correctamente. Verifica la API key en Configuración."
-                    .to_string(),
-            ));
-        }
-
-        let client = EmbeddingClient::new(embedding_config.clone())?;
-
-        // Crear una copia temporal de la base de datos para uso en búsqueda
-        let db_path = self.notes_dir.db_path();
-        let temp_db = crate::core::NotesDatabase::new(&db_path)?;
-        let search_engine = SemanticSearch::new(client, temp_db);
-
-        let threshold_usado = min_similarity.unwrap_or(0.2);
-        println!("🎯 Threshold de similitud: {}", threshold_usado);
-
-        let options = SearchOptions {
-            limit: limit.unwrap_or(10),
-            min_similarity: threshold_usado,
-            folder_filter: folder,
-            ..Default::default()
+        // Usar NoteMemory de RIG
+        let memory = match self.note_memory.borrow().as_ref() {
+            Some(m) => m.clone(),
+            None => {
+                return Ok(MCPToolResult::error(
+                    "NoteMemory no inicializado. Verifica que embeddings esté configurado."
+                        .to_string(),
+                ));
+            }
         };
 
-        // Ejecutar búsqueda semántica (async -> sync boundary)
+        let threshold = min_similarity.unwrap_or(0.2);
+        let max_results = limit.unwrap_or(10);
+
+        // Ejecutar búsqueda
         let results = tokio::runtime::Runtime::new()?
-            .block_on(async { search_engine.search(&query, options).await })?;
+            .block_on(async { memory.search(&query, max_results).await })?;
 
         if results.is_empty() {
             return Ok(MCPToolResult::success(json!({
@@ -1633,55 +1624,48 @@ impl MCPToolExecutor {
             })));
         }
 
-        let results_json: Vec<_> = results
-            .iter()
-            .map(|r| {
-                // Extraer solo el nombre del archivo sin la ruta completa
-                let note_name = r
-                    .note_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("desconocido");
+        // Filtrar por threshold y folder si es necesario
+        let filtered_results: Vec<_> = results
+            .into_iter()
+            .filter(|(score, _id, _meta, _content)| *score >= threshold)
+            .filter(|(_, id, _, _)| {
+                if let Some(ref folder_filter) = folder {
+                    id.contains(folder_filter)
+                } else {
+                    true
+                }
+            })
+            .collect();
 
+        let results_json: Vec<_> = filtered_results
+            .iter()
+            .enumerate()
+            .map(|(i, (score, note_id, metadata, _content))| {
                 json!({
-                    "note_name": note_name,
-                    "note_path": r.note_path.display().to_string(),
-                    "chunk_index": r.chunk_index,
-                    "similarity": format!("{:.2}%", r.similarity * 100.0),
-                    "snippet": &r.snippet
+                    "rank": i + 1,
+                    "note_id": note_id,
+                    "similarity": format!("{:.2}%", score * 100.0),
+                    "score": score,
+                    "metadata": metadata
                 })
             })
             .collect();
 
-        // Crear una lista legible de los nombres de notas para la respuesta
-        let note_names_list: Vec<String> = results
+        let note_list: Vec<String> = filtered_results
             .iter()
             .enumerate()
-            .map(|(i, r)| {
-                let note_name = r
-                    .note_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("desconocido");
-                format!(
-                    "{}. \"{}\" - Similitud: {:.0}%",
-                    i + 1,
-                    note_name.trim_end_matches(".md"),
-                    r.similarity * 100.0
-                )
+            .map(|(i, (score, note_id, _, _))| {
+                format!("{}. {} - Similitud: {:.0}%", i + 1, note_id, score * 100.0)
             })
             .collect();
 
         Ok(MCPToolResult::success(json!({
-            "message": format!("✓ {} resultados para '{}'. RESPONDE AL USUARIO CON ESTA LISTA EXACTA:\n\n{}",
-                results.len(),
-                query,
-                note_names_list.join("\n")),
+            "message": format!("✓ {} resultados para '{}'\n\n{}",
+                filtered_results.len(), query, note_list.join("\n")),
             "query": query,
             "results": results_json,
-            "note_names_list": note_names_list,
-            "total": results.len(),
-            "instruction": "Muestra al usuario la lista de resultados EXACTAMENTE como aparece en 'note_names_list'. NO inventes notas."
+            "note_list": note_list,
+            "total": filtered_results.len()
         })))
     }
 
@@ -1691,90 +1675,47 @@ impl MCPToolExecutor {
         limit: Option<usize>,
         min_similarity: Option<f32>,
     ) -> Result<MCPToolResult> {
-        use crate::core::{EmbeddingClient, SearchOptions, SemanticSearch};
+        // Buscar notas similares usando el contenido de la nota como query
+        let note = self
+            .notes_dir
+            .find_note(&note_path)?
+            .ok_or_else(|| anyhow::anyhow!("Nota no encontrada: {}", note_path))?;
 
-        // Obtener configuración de embeddings del NotesConfig real
-        let mut embedding_config = self.notes_config.borrow().get_embedding_config().clone();
+        let content = note.read()?;
 
-        // Si embeddings no tiene API key, usar la de AI config
-        if embedding_config.api_key.is_none() {
-            embedding_config.api_key = self.notes_config.borrow().get_ai_config().api_key.clone();
-        }
+        // Tomar las primeras 500 palabras como representación de la nota
+        let query: String = content
+            .split_whitespace()
+            .take(500)
+            .collect::<Vec<_>>()
+            .join(" ");
 
-        if !embedding_config.enabled || !embedding_config.is_valid() {
-            return Ok(MCPToolResult::error(
-                "Embeddings no configurado. Habilita embeddings en la configuración.".to_string(),
-            ));
-        }
-
-        let client = EmbeddingClient::new(embedding_config.clone())?;
-        let db_path = self.notes_dir.db_path();
-        let temp_db = crate::core::NotesDatabase::new(&db_path)?;
-        let search_engine = SemanticSearch::new(client, temp_db);
-
-        let options = SearchOptions {
-            limit: limit.unwrap_or(10),
-            min_similarity: min_similarity.unwrap_or(0.2),
-            folder_filter: None,
-            ..Default::default()
-        };
-
-        // Ejecutar búsqueda de notas similares
-        let results = tokio::runtime::Runtime::new()?
-            .block_on(async { search_engine.find_similar_notes(&note_path, options).await })?;
-
-        if results.is_empty() {
-            return Ok(MCPToolResult::success(json!({
-                "message": format!("No se encontraron notas similares a '{}'", note_path),
-                "note_path": note_path,
-                "results": [],
-                "total": 0
-            })));
-        }
-
-        // Agrupar por nota
-        let grouped = SemanticSearch::group_by_note(results);
-
-        let results_json: Vec<_> = grouped
-            .iter()
-            .map(|(path, chunks)| {
-                let avg_similarity =
-                    chunks.iter().map(|c| c.similarity).sum::<f32>() / chunks.len() as f32;
-                let best_snippet = chunks
-                    .iter()
-                    .max_by(|a, b| a.similarity.partial_cmp(&b.similarity).unwrap())
-                    .map(|c| &c.snippet);
-
-                json!({
-                    "note_path": path.display().to_string(),
-                    "similarity": chunks[0].similarity,
-                    "chunk_count": chunks.len(),
-                    "avg_similarity": avg_similarity,
-                    "best_snippet": best_snippet
-                })
-            })
-            .collect();
-
-        Ok(MCPToolResult::success(json!({
-            "message": format!("✓ {} notas similares a '{}'", grouped.len(), note_path),
-            "note_path": note_path,
-            "results": results_json,
-            "total": grouped.len()
-        })))
+        // Usar semantic_search internamente
+        self.semantic_search(query, limit, min_similarity, None)
     }
 
     fn get_embedding_stats(&self) -> Result<MCPToolResult> {
-        // Obtener configuración de embeddings del NotesConfig real
+        // Consultar base de datos RIG directamente
+        let db_path = self.notes_dir.db_path();
+        let conn = rusqlite::Connection::open(&db_path)?;
+
+        let notes_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM rig_note", [], |row| row.get(0))
+            .unwrap_or(0);
+
+        let chunks_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM rig_note_embeddings", [], |row| {
+                row.get(0)
+            })
+            .unwrap_or(0);
+
         let embedding_config = self.notes_config.borrow().get_embedding_config().clone();
-        let db_ref = self.notes_db.borrow();
-        let (notes_count, chunks_count, tokens_count) = db_ref.get_embedding_stats()?;
 
         Ok(MCPToolResult::success(json!({
-            "message": format!("✓ Estadísticas del índice de embeddings"),
+            "message": format!("✓ Estadísticas del índice de embeddings (RIG)"),
             "stats": {
                 "total_notes": notes_count,
                 "total_chunks": chunks_count,
-                "total_tokens": tokens_count,
                 "model": embedding_config.model,
                 "dimension": embedding_config.dimension,
                 "max_chunk_tokens": embedding_config.max_chunk_tokens,
@@ -1784,21 +1725,18 @@ impl MCPToolExecutor {
     }
 
     fn index_note(&self, note_path: String) -> Result<MCPToolResult> {
-        use crate::core::{EmbeddingClient, EmbeddingIndexer, TextChunker};
+        use crate::core::TextChunker;
 
-        // Obtener configuración de embeddings del NotesConfig real
-        let mut embedding_config = self.notes_config.borrow().get_embedding_config().clone();
-
-        // Si embeddings no tiene API key, usar la de AI config
-        if embedding_config.api_key.is_none() {
-            embedding_config.api_key = self.notes_config.borrow().get_ai_config().api_key.clone();
-        }
-
-        if !embedding_config.enabled || !embedding_config.is_valid() {
-            return Ok(MCPToolResult::error(
-                "Embeddings no configurado. Habilita embeddings en la configuración y añade una API key.".to_string()
-            ));
-        }
+        // Verificar que NoteMemory está inicializado
+        let memory = match self.note_memory.borrow().as_ref() {
+            Some(m) => m.clone(),
+            None => {
+                return Ok(MCPToolResult::error(
+                    "NoteMemory no inicializado. Verifica que embeddings esté configurado."
+                        .to_string(),
+                ));
+            }
+        };
 
         // Leer contenido de la nota
         let note = self
@@ -1807,70 +1745,117 @@ impl MCPToolExecutor {
             .ok_or_else(|| anyhow::anyhow!("Nota no encontrada: {}", note_path))?;
 
         let content = note.read()?;
-        let client = EmbeddingClient::new(embedding_config.clone())?;
-        let db_path = self.notes_dir.db_path();
-        let temp_db = crate::core::NotesDatabase::new(&db_path)?;
+        let embedding_config = self.notes_config.borrow().get_embedding_config().clone();
 
-        let chunker = TextChunker::new();
-        let indexer = EmbeddingIndexer::new(client, temp_db, chunker);
+        // Parse frontmatter para metadata
+        use crate::core::frontmatter::Frontmatter;
+        let (frontmatter, _) = Frontmatter::parse_or_empty(&content);
+        let metadata = serde_json::json!({
+            "tags": frontmatter.tags,
+            "path": note_path
+        });
 
-        // Indexar nota (async)
-        let note_path_buf = std::path::PathBuf::from(&note_path);
-        let result = tokio::runtime::Runtime::new()?
-            .block_on(async { indexer.index_note(&note_path_buf, &content).await })?;
+        // Chunking
+        let chunk_config = crate::core::ChunkConfig {
+            max_tokens: embedding_config.max_chunk_tokens,
+            overlap_tokens: embedding_config.overlap_tokens,
+            ..Default::default()
+        };
+        let chunker = TextChunker::with_config(chunk_config);
+        let chunks = chunker.chunk_text(&content).unwrap_or_default();
+
+        // Indexar chunks
+        let rt = tokio::runtime::Runtime::new()?;
+        let mut success_count = 0;
+
+        for (i, chunk) in chunks.iter().enumerate() {
+            let chunk_id = format!("{}#{}", note_path, i);
+            match rt.block_on(memory.index_note(&chunk_id, &chunk.text, metadata.clone())) {
+                Ok(_) => success_count += 1,
+                Err(e) => eprintln!("⚠️ Error indexando chunk {}: {}", i, e),
+            }
+        }
 
         Ok(MCPToolResult::success(json!({
-            "message": format!("✓ Nota '{}' indexada: {} chunks", note_path, result),
+            "message": format!("✓ Nota '{}' indexada: {} chunks", note_path, success_count),
             "note_path": note_path,
-            "total_chunks": result
+            "total_chunks": success_count
         })))
     }
 
     fn reindex_all_notes(&self) -> Result<MCPToolResult> {
-        use crate::core::{EmbeddingClient, EmbeddingIndexer, TextChunker};
-        use std::path::PathBuf;
+        use crate::core::TextChunker;
 
-        let mut config = self.notes_config.borrow().get_embedding_config().clone();
+        // Verificar que NoteMemory está inicializado
+        let memory = match self.note_memory.borrow().as_ref() {
+            Some(m) => m.clone(),
+            None => {
+                return Ok(MCPToolResult::error(
+                    "NoteMemory no inicializado. Verifica que embeddings esté configurado."
+                        .to_string(),
+                ));
+            }
+        };
 
-        // Si embeddings no tiene API key, usar la de AI config
-        if config.api_key.is_none() {
-            config.api_key = self.notes_config.borrow().get_ai_config().api_key.clone();
-        }
+        let rt = tokio::runtime::Runtime::new()?;
 
-        if !config.is_valid() {
-            return Ok(MCPToolResult::error(
-                "Embeddings no configurado. Habilita embeddings en la configuración y añade una API key.".to_string()
-            ));
+        // Clear all existing indexes first
+        eprintln!("🗑️ Limpiando índices existentes antes de reindexar...");
+        if let Err(e) = rt.block_on(memory.clear_all()) {
+            return Ok(MCPToolResult::error(format!(
+                "Error limpiando índices: {}",
+                e
+            )));
         }
 
         // Obtener todas las notas
         let all_notes = self.notes_dir.list_notes()?;
-        let notes_with_content: Vec<(PathBuf, String)> = all_notes
-            .iter()
-            .filter_map(|note| {
-                let content = note.read().ok()?;
-                Some((PathBuf::from(&note.name), content))
-            })
-            .collect();
+        let embedding_config = self.notes_config.borrow().get_embedding_config().clone();
 
-        let total_notes = notes_with_content.len();
-        let client = EmbeddingClient::new(config.clone())?;
-        let db_path = self.notes_dir.db_path();
-        let temp_db = crate::core::NotesDatabase::new(&db_path)?;
+        let chunk_config = crate::core::ChunkConfig {
+            max_tokens: embedding_config.max_chunk_tokens,
+            overlap_tokens: embedding_config.overlap_tokens,
+            ..Default::default()
+        };
+        let chunker = TextChunker::with_config(chunk_config);
 
-        let chunker = TextChunker::new();
-        let indexer = EmbeddingIndexer::new(client, temp_db, chunker);
+        let mut total_notes = 0;
+        let mut total_chunks = 0;
+        let mut errors = 0;
 
-        // Re-indexar todas las notas
-        let result = tokio::runtime::Runtime::new()?
-            .block_on(async { indexer.index_notes(notes_with_content, None).await })?;
+        for note in all_notes {
+            if let Ok(content) = note.read() {
+                use crate::core::frontmatter::Frontmatter;
+                let (frontmatter, _) = Frontmatter::parse_or_empty(&content);
+                let note_name = note.name.clone();
+
+                let metadata = serde_json::json!({
+                    "tags": frontmatter.tags,
+                    "path": note_name
+                });
+
+                let chunks = chunker.chunk_text(&content).unwrap_or_default();
+
+                for (i, chunk) in chunks.iter().enumerate() {
+                    let chunk_id = format!("{}#{}", note_name, i);
+                    match rt.block_on(memory.index_note(&chunk_id, &chunk.text, metadata.clone())) {
+                        Ok(_) => total_chunks += 1,
+                        Err(e) => {
+                            eprintln!("Failed to index note '{}': {}", note_name, e);
+                            errors += 1;
+                        }
+                    }
+                }
+
+                total_notes += 1;
+            }
+        }
 
         Ok(MCPToolResult::success(json!({
-            "message": format!("✓ Re-indexación completa: {} notas, {} chunks", total_notes, result.total_chunks),
-            "total_notes": result.total_notes,
-            "total_chunks": result.total_chunks,
-            "indexed_notes": result.indexed_notes,
-            "errors": result.errors
+            "message": format!("✓ Re-indexación completa: {} notas, {} chunks", total_notes, total_chunks),
+            "total_notes": total_notes,
+            "total_chunks": total_chunks,
+            "errors": errors
         })))
     }
 
@@ -1924,26 +1909,74 @@ impl MCPToolExecutor {
 
         // Buscar note_id si se proporciona note_name
         let note_id = if let Some(name) = note_name {
-            // Buscar la nota en la base de datos usando get_note
-            match self.notes_db.borrow().get_note(name) {
-                Ok(Some(metadata)) => {
-                    println!(
-                        "✓ Vinculando recordatorio a nota '{}' (ID: {})",
-                        name, metadata.id
-                    );
-                    Some(metadata.id)
+            // Estrategia robusta de resolución de ID (similar a src/app.rs)
+            // 1. Intentar búsqueda directa por nombre
+            let mut resolved_id = self
+                .notes_db
+                .borrow()
+                .get_note(name)
+                .ok()
+                .flatten()
+                .map(|m| m.id);
+
+            // 2. Si falla, intentar buscar el archivo y resolver por path
+            if resolved_id.is_none() {
+                if let Ok(Some(note)) = self.notes_dir.find_note(name) {
+                    let path_str = note.path().to_str().unwrap_or("");
+
+                    // 2a. Buscar por path en DB
+                    resolved_id = self
+                        .notes_db
+                        .borrow()
+                        .get_note_by_path(path_str)
+                        .ok()
+                        .flatten()
+                        .map(|m| m.id);
+
+                    // 2b. Si aún no existe, indexar la nota al vuelo
+                    if resolved_id.is_none() {
+                        println!(
+                            "⚠️ Nota '{}' encontrada pero no indexada. Indexando...",
+                            name
+                        );
+                        if let Ok(content) = note.read() {
+                            // Determinar carpeta relativa
+                            let folder = note
+                                .path()
+                                .parent()
+                                .and_then(|p| p.strip_prefix(self.notes_dir.root()).ok())
+                                .filter(|p| !p.as_os_str().is_empty())
+                                .and_then(|p| p.to_str());
+
+                            if self
+                                .notes_db
+                                .borrow()
+                                .index_note(name, path_str, &content, folder)
+                                .is_ok()
+                            {
+                                // Intentar recuperar ID nuevamente
+                                resolved_id = self
+                                    .notes_db
+                                    .borrow()
+                                    .get_note_by_path(path_str)
+                                    .ok()
+                                    .flatten()
+                                    .map(|m| m.id);
+                            }
+                        }
+                    }
                 }
-                Ok(None) => {
-                    println!(
-                        "⚠️ Nota '{}' no encontrada, creando recordatorio sin vínculo",
-                        name
-                    );
-                    None
-                }
-                Err(e) => {
-                    println!("⚠️ Error buscando nota '{}': {}", name, e);
-                    None
-                }
+            }
+
+            if let Some(id) = resolved_id {
+                println!("✓ Vinculando recordatorio a nota '{}' (ID: {})", name, id);
+                Some(id)
+            } else {
+                println!(
+                    "⚠️ Nota '{}' no encontrada ni en DB ni en disco, creando recordatorio sin vínculo",
+                    name
+                );
+                None
             }
         } else {
             None
@@ -1964,6 +1997,56 @@ impl MCPToolExecutor {
             repeat_enum,
         )?;
 
+        // Si el recordatorio está vinculado a una nota, agregar el texto mágico al archivo
+        // para mantener la consistencia con el sistema "Text-as-Source-of-Truth"
+        if let Some(name) = note_name {
+            if let Ok(Some(note)) = self.notes_dir.find_note(name) {
+                if let Ok(mut content) = note.read() {
+                    // Formatear fecha a local para que sea legible y parseable
+                    let date_str = due_date_parsed
+                        .with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d %H:%M");
+
+                    let priority_str = match priority_enum {
+                        Priority::Urgent => " urgente",
+                        Priority::High => " alta",
+                        Priority::Medium => " media",
+                        Priority::Low => " baja",
+                    };
+
+                    let repeat_str = match repeat_enum {
+                        RepeatPattern::Daily => " diario",
+                        RepeatPattern::Weekly => " semanal",
+                        RepeatPattern::Monthly => " mensual",
+                        _ => "",
+                    };
+
+                    // Construir el string mágico: !!RECORDAR(fecha prioridad repetir, título)
+                    let reminder_text = format!(
+                        "\n\n!!RECORDAR({}{}{}, {})",
+                        date_str, priority_str, repeat_str, title
+                    );
+
+                    content.push_str(&reminder_text);
+
+                    if let Err(e) = note.write(&content) {
+                        eprintln!(
+                            "⚠️ Error escribiendo recordatorio en nota '{}': {}",
+                            name, e
+                        );
+                    } else {
+                        // Reindexar nota para actualizar contenido en BD
+                        let _ = self.notes_db.borrow().index_note(
+                            name,
+                            note.path().to_str().unwrap_or(""),
+                            &content,
+                            None,
+                        );
+                    }
+                }
+            }
+        }
+
         Ok(MCPToolResult::success(json!({
             "message": format!("✓ Recordatorio '{}' creado (ID: {})", title, id),
             "reminder_id": id,
@@ -1976,8 +2059,14 @@ impl MCPToolExecutor {
         })))
     }
 
-    fn list_reminders(&self, status: Option<&str>, limit: Option<i32>) -> Result<MCPToolResult> {
+    fn list_reminders(
+        &self,
+        status: Option<&str>,
+        days: Option<i32>,
+        limit: Option<i32>,
+    ) -> Result<MCPToolResult> {
         use crate::reminders::ReminderStatus;
+        use chrono::{Duration, Utc};
 
         let db_path = self.notes_dir.root().parent().unwrap().join("reminders.db");
         let conn = rusqlite::Connection::open(&db_path)?;
@@ -1999,8 +2088,20 @@ impl MCPToolExecutor {
 
         let all_reminders = reminders_db.list_reminders(status_filter)?;
 
+        // Filtrar por días si se especifica
+        let mut filtered: Vec<_> = if let Some(d) = days {
+            let now = Utc::now();
+            let limit_date = now + Duration::days(d as i64);
+
+            all_reminders
+                .into_iter()
+                .filter(|r| r.due_date <= limit_date && r.due_date >= now)
+                .collect()
+        } else {
+            all_reminders
+        };
+
         // Aplicar límite si se especifica
-        let mut filtered = all_reminders;
         if let Some(lim) = limit {
             filtered.truncate(lim as usize);
         }
@@ -2075,5 +2176,25 @@ impl MCPToolExecutor {
             "message": format!("✓ Recordatorio {} eliminado", id),
             "reminder_id": id
         })))
+    }
+
+    pub fn get_notes_dir(&self) -> &NotesDirectory {
+        &self.notes_dir
+    }
+
+    pub fn get_db_path(&self) -> std::path::PathBuf {
+        self.notes_dir.db_path()
+    }
+
+    pub fn get_notes_config(&self) -> Rc<RefCell<NotesConfig>> {
+        self.notes_config.clone()
+    }
+
+    pub fn get_note_memory(
+        &self,
+    ) -> Rc<
+        RefCell<Option<Arc<crate::ai::memory::NoteMemory<rig::providers::openai::EmbeddingModel>>>>,
+    > {
+        self.note_memory.clone()
     }
 }

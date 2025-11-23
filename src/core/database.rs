@@ -181,7 +181,7 @@ impl NotesDatabase {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
-            
+
             -- Tabla de tags
             CREATE TABLE IF NOT EXISTS tags (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -189,7 +189,7 @@ impl NotesDatabase {
                 color TEXT,
                 usage_count INTEGER DEFAULT 0
             );
-            
+
             -- Relación many-to-many entre notas y tags
             CREATE TABLE IF NOT EXISTS note_tags (
                 note_id INTEGER NOT NULL,
@@ -198,14 +198,14 @@ impl NotesDatabase {
                 FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE,
                 FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
             );
-            
+
             -- Tabla virtual para full-text search
             CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
                 name,
                 content,
                 tokenize = 'porter unicode61'
             );
-            
+
             -- Índices para mejorar performance
             CREATE INDEX IF NOT EXISTS idx_notes_folder ON notes(folder);
             CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at DESC);
@@ -213,7 +213,7 @@ impl NotesDatabase {
             CREATE INDEX IF NOT EXISTS idx_tags_usage ON tags(usage_count DESC);
             CREATE INDEX IF NOT EXISTS idx_note_tags_note ON note_tags(note_id);
             CREATE INDEX IF NOT EXISTS idx_note_tags_tag ON note_tags(tag_id);
-            
+
             -- Tabla de sesiones de chat
             CREATE TABLE IF NOT EXISTS chat_sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -224,7 +224,7 @@ impl NotesDatabase {
                 temperature REAL DEFAULT 0.7,
                 max_tokens INTEGER DEFAULT 2000
             );
-            
+
             -- Tabla de mensajes de chat
             CREATE TABLE IF NOT EXISTS chat_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -234,7 +234,7 @@ impl NotesDatabase {
                 created_at INTEGER NOT NULL,
                 FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
             );
-            
+
             -- Tabla de notas adjuntas al contexto del chat
             CREATE TABLE IF NOT EXISTS chat_context_notes (
                 session_id INTEGER NOT NULL,
@@ -244,12 +244,12 @@ impl NotesDatabase {
                 FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE,
                 FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
             );
-            
+
             -- Índices para chat
             CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
             CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages(created_at);
             CREATE INDEX IF NOT EXISTS idx_chat_context_session ON chat_context_notes(session_id);
-            
+
             -- Tabla de embeddings para búsqueda semántica (v2)
             CREATE TABLE IF NOT EXISTS note_embeddings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -262,7 +262,7 @@ impl NotesDatabase {
                 updated_at INTEGER NOT NULL,
                 UNIQUE(note_path, chunk_index)
             );
-            
+
             -- Índices para embeddings
             CREATE INDEX IF NOT EXISTS idx_embeddings_note ON note_embeddings(note_path);
             CREATE INDEX IF NOT EXISTS idx_embeddings_updated ON note_embeddings(updated_at DESC);
@@ -279,6 +279,7 @@ impl NotesDatabase {
                 .query_row("SELECT version FROM schema_version", [], |row| row.get(0))?;
 
         if current_version < Self::SCHEMA_VERSION {
+            // Solo mostrar mensaje si realmente necesitamos migrar
             println!(
                 "Migrando base de datos de v{} a v{}",
                 current_version,
@@ -299,6 +300,11 @@ impl NotesDatabase {
             if current_version < 4 {
                 self.migrate_to_v4()?;
             }
+
+            println!(
+                "✅ Migraciones completadas - BD actualizada a v{}",
+                Self::SCHEMA_VERSION
+            );
         }
 
         Ok(())
@@ -306,7 +312,19 @@ impl NotesDatabase {
 
     /// Migración a versión 2: Agregar tabla de embeddings
     fn migrate_to_v2(&mut self) -> Result<()> {
-        println!("Aplicando migración v2: Agregando tabla de embeddings");
+        // Verificar si la tabla ya existe
+        let table_exists: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='note_embeddings'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)?;
+
+        if !table_exists {
+            println!("Aplicando migración v2: Agregando tabla de embeddings");
+        }
 
         self.conn.execute_batch(
             r#"
@@ -322,7 +340,7 @@ impl NotesDatabase {
                 updated_at INTEGER NOT NULL,
                 UNIQUE(note_path, chunk_index)
             );
-            
+
             -- Índices para mejorar performance
             CREATE INDEX IF NOT EXISTS idx_embeddings_note ON note_embeddings(note_path);
             CREATE INDEX IF NOT EXISTS idx_embeddings_updated ON note_embeddings(updated_at DESC);
@@ -333,13 +351,24 @@ impl NotesDatabase {
         self.conn
             .execute("REPLACE INTO schema_version (version) VALUES (2)", [])?;
 
-        println!("Migración v2 completada");
         Ok(())
     }
 
     /// Migración a versión 3: Agregar tabla de caché de queries
     fn migrate_to_v3(&mut self) -> Result<()> {
-        println!("Aplicando migración v3: Agregando tabla de caché de queries");
+        // Verificar si la tabla ya existe
+        let table_exists: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='query_cache'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)?;
+
+        if !table_exists {
+            println!("Aplicando migración v3: Agregando tabla de caché de queries");
+        }
 
         self.conn.execute_batch(
             r#"
@@ -353,7 +382,7 @@ impl NotesDatabase {
                 created_at INTEGER NOT NULL,
                 last_used_at INTEGER NOT NULL
             );
-            
+
             -- Índice para búsquedas rápidas por hash
             CREATE INDEX IF NOT EXISTS idx_query_hash ON query_cache(query_hash);
             CREATE INDEX IF NOT EXISTS idx_query_last_used ON query_cache(last_used_at DESC);
@@ -364,13 +393,24 @@ impl NotesDatabase {
         self.conn
             .execute("REPLACE INTO schema_version (version) VALUES (3)", [])?;
 
-        println!("Migración v3 completada");
         Ok(())
     }
 
     /// Migración a versión 4: Agregar tabla de recordatorios
     fn migrate_to_v4(&mut self) -> Result<()> {
-        println!("Aplicando migración v4: Agregando tabla de recordatorios");
+        // Verificar si la tabla ya existe
+        let table_exists: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='reminders'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)?;
+
+        if !table_exists {
+            println!("Aplicando migración v4: Agregando tabla de recordatorios");
+        }
 
         self.conn.execute_batch(
             r#"
@@ -389,7 +429,7 @@ impl NotesDatabase {
                 updated_at INTEGER NOT NULL,
                 FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE SET NULL
             );
-            
+
             CREATE INDEX IF NOT EXISTS idx_reminders_due_date ON reminders(due_date);
             CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status);
             CREATE INDEX IF NOT EXISTS idx_reminders_note_id ON reminders(note_id);
@@ -400,7 +440,6 @@ impl NotesDatabase {
         self.conn
             .execute("REPLACE INTO schema_version (version) VALUES (4)", [])?;
 
-        println!("Migración v4 completada");
         Ok(())
     }
 
@@ -593,12 +632,12 @@ impl NotesDatabase {
     pub fn list_notes(&self, folder: Option<&str>) -> Result<Vec<NoteMetadata>> {
         let mut stmt = if folder.is_some() {
             self.conn.prepare(
-                "SELECT id, name, path, folder, order_index, created_at, updated_at 
+                "SELECT id, name, path, folder, order_index, created_at, updated_at
                  FROM notes WHERE folder = ?1 ORDER BY order_index, name",
             )?
         } else {
             self.conn.prepare(
-                "SELECT id, name, path, folder, order_index, created_at, updated_at 
+                "SELECT id, name, path, folder, order_index, created_at, updated_at
                  FROM notes ORDER BY order_index, name",
             )?
         };
@@ -769,7 +808,7 @@ impl NotesDatabase {
 
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT 
+            SELECT
                 notes.id,
                 notes.name,
                 notes.path,
@@ -998,8 +1037,9 @@ impl NotesDatabase {
 
         self.conn.execute(
             r#"
-            INSERT OR IGNORE INTO chat_context_notes (session_id, note_id, added_at)
+            INSERT INTO chat_context_notes (session_id, note_id, added_at)
             VALUES (?1, ?2, ?3)
+            ON CONFLICT(session_id, note_id) DO UPDATE SET added_at = ?3
             "#,
             params![session_id, note_id, now],
         )?;
@@ -1408,46 +1448,153 @@ impl NotesDatabase {
     }
 
     /// Actualizar el campo folder de todas las notas en una carpeta (para rename/move)
-    pub fn update_notes_folder(&self, old_folder: &str, new_folder: &str) -> Result<usize> {
-        // Actualizar notas directamente en la carpeta
-        let updated = self.conn.execute(
-            "UPDATE notes SET folder = ?1 WHERE folder = ?2",
-            params![new_folder, old_folder],
-        )?;
+    /// Actualizar el campo folder y path de todas las notas en una carpeta (para rename/move)
+    pub fn update_notes_folder(
+        &self,
+        old_folder: &str,
+        new_folder: &str,
+        root_path: &str,
+    ) -> Result<usize> {
+        let old_prefix_path = Path::new(root_path)
+            .join(old_folder)
+            .to_string_lossy()
+            .to_string();
+        let new_prefix_path = Path::new(root_path)
+            .join(new_folder)
+            .to_string_lossy()
+            .to_string();
 
-        // Actualizar notas en subcarpetas
-        let pattern = format!("{}/%", old_folder);
-        let replacement_prefix = format!("{}/", new_folder);
-        let old_prefix = format!("{}/", old_folder);
+        // Asegurar que terminen en separador para evitar reemplazos parciales incorrectos
+        let old_prefix_str = if old_prefix_path.ends_with(std::path::MAIN_SEPARATOR) {
+            old_prefix_path
+        } else {
+            format!("{}{}", old_prefix_path, std::path::MAIN_SEPARATOR)
+        };
 
-        // Para subcarpetas, necesitamos reemplazar el prefijo
-        let subcarpetas: Vec<(i64, String)> = self
+        let new_prefix_str = if new_prefix_path.ends_with(std::path::MAIN_SEPARATOR) {
+            new_prefix_path
+        } else {
+            format!("{}{}", new_prefix_path, std::path::MAIN_SEPARATOR)
+        };
+
+        // 1. Actualizar notas directamente en la carpeta
+        // Necesitamos actualizar folder Y path
+        // SQLite no tiene replace() en todas las versiones, pero rusqlite suele incluirlo.
+        // Sin embargo, para mayor seguridad, iteramos y actualizamos.
+
+        let mut total_updated = 0;
+
+        // Buscar todas las notas afectadas (directas y en subcarpetas)
+        let pattern = format!("{}%", old_folder); // folder LIKE 'old%'
+
+        let notes_to_update: Vec<(i64, String, String)> = self
             .conn
-            .prepare("SELECT id, folder FROM notes WHERE folder LIKE ?1")?
-            .query_map(params![pattern], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .prepare("SELECT id, folder, path FROM notes WHERE folder = ?1 OR folder LIKE ?2")?
+            .query_map(params![old_folder, format!("{}/%", old_folder)], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
             .collect::<SqliteResult<Vec<_>>>()?;
 
-        let subcarpetas_count = subcarpetas.len();
+        for (id, current_folder, current_path) in notes_to_update {
+            // Calcular nuevo folder
+            let new_note_folder = if current_folder == old_folder {
+                new_folder.to_string()
+            } else if let Some(suffix) = current_folder.strip_prefix(old_folder) {
+                // Es una subcarpeta: old/sub -> new/sub
+                // suffix empieza con /, ej: "/sub"
+                format!("{}{}", new_folder, suffix)
+            } else {
+                continue; // No debería pasar por el WHERE
+            };
 
-        for (id, old_path) in subcarpetas {
-            if let Some(suffix) = old_path.strip_prefix(&old_prefix) {
-                let new_path = format!("{}{}", replacement_prefix, suffix);
-                self.conn.execute(
-                    "UPDATE notes SET folder = ?1 WHERE id = ?2",
-                    params![new_path, id],
-                )?;
-            }
+            // Calcular nuevo path
+            // Reemplazar el prefijo del path absoluto
+            let new_note_path = if current_path.starts_with(&old_prefix_str) {
+                current_path.replace(&old_prefix_str, &new_prefix_str)
+            } else {
+                // Fallback si el path no coincide exactamente (raro)
+                // Intentar construirlo desde el root
+                let filename = Path::new(&current_path).file_name().unwrap_or_default();
+                Path::new(root_path)
+                    .join(&new_note_folder)
+                    .join(filename)
+                    .to_string_lossy()
+                    .to_string()
+            };
+
+            // Actualizar notes
+            self.conn.execute(
+                "UPDATE notes SET folder = ?1, path = ?2, updated_at = ?3 WHERE id = ?4",
+                params![new_note_folder, new_note_path, Utc::now().timestamp(), id],
+            )?;
+
+            // Actualizar embeddings
+            self.conn.execute(
+                "UPDATE note_embeddings SET note_path = ?1 WHERE note_path = ?2",
+                params![new_note_path, current_path],
+            )?;
+
+            total_updated += 1;
         }
 
-        let total = updated + subcarpetas_count;
-        if total > 0 {
+        if total_updated > 0 {
             println!(
-                "📝 {} notas actualizadas: carpeta '{}' → '{}'",
-                total, old_folder, new_folder
+                "📝 {} notas actualizadas: carpeta '{}' → '{}' (incluidos paths y embeddings)",
+                total_updated, old_folder, new_folder
             );
         }
 
-        Ok(total)
+        Ok(total_updated)
+    }
+
+    /// Renombrar una nota actualizando todas las tablas (notes, fts, embeddings)
+    pub fn rename_note(
+        &self,
+        old_name: &str,
+        new_name: &str,
+        new_path: &str,
+        new_folder: Option<&str>,
+    ) -> Result<()> {
+        let now = Utc::now().timestamp();
+
+        // Obtener datos de la nota original
+        let note_data: Option<(i64, String)> = self
+            .conn
+            .query_row(
+                "SELECT id, path FROM notes WHERE name = ?1",
+                params![old_name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+
+        if let Some((id, old_path)) = note_data {
+            // 1. Actualizar tabla principal
+            self.conn.execute(
+                "UPDATE notes SET name = ?1, path = ?2, folder = ?3, updated_at = ?4 WHERE id = ?5",
+                params![new_name, new_path, new_folder, now, id],
+            )?;
+
+            // 2. Actualizar FTS (solo el nombre, el contenido se actualiza por separado si cambió)
+            self.conn.execute(
+                "UPDATE notes_fts SET name = ?1 WHERE rowid = ?2",
+                params![new_name, id],
+            )?;
+
+            // 3. Actualizar paths en embeddings
+            self.conn.execute(
+                "UPDATE note_embeddings SET note_path = ?1 WHERE note_path = ?2",
+                params![new_path, old_path],
+            )?;
+
+            println!(
+                "📝 Nota renombrada: '{}' -> '{}' (incluidos embeddings)",
+                old_name, new_name
+            );
+        } else {
+            return Err(DatabaseError::NoteNotFound(old_name.to_string()));
+        }
+
+        Ok(())
     }
 }
 

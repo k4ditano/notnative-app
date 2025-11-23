@@ -34,7 +34,7 @@ impl ReminderDatabase {
                 updated_at INTEGER NOT NULL,
                 FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE SET NULL
             );
-            
+
             CREATE INDEX IF NOT EXISTS idx_reminders_due_date ON reminders(due_date);
             CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status);
             CREATE INDEX IF NOT EXISTS idx_reminders_note_id ON reminders(note_id);
@@ -82,7 +82,7 @@ impl ReminderDatabase {
             .conn
             .query_row(
                 r#"
-                SELECT id, note_id, title, description, due_date, priority, status, 
+                SELECT id, note_id, title, description, due_date, priority, status,
                        snooze_until, repeat_pattern, created_at, updated_at
                 FROM reminders
                 WHERE id = ?1
@@ -116,7 +116,7 @@ impl ReminderDatabase {
         let query = if let Some(status) = status_filter {
             format!(
                 r#"
-                SELECT id, note_id, title, description, due_date, priority, status, 
+                SELECT id, note_id, title, description, due_date, priority, status,
                        snooze_until, repeat_pattern, created_at, updated_at
                 FROM reminders
                 WHERE status = {}
@@ -126,7 +126,7 @@ impl ReminderDatabase {
             )
         } else {
             r#"
-            SELECT id, note_id, title, description, due_date, priority, status, 
+            SELECT id, note_id, title, description, due_date, priority, status,
                    snooze_until, repeat_pattern, created_at, updated_at
             FROM reminders
             ORDER BY due_date ASC
@@ -162,7 +162,7 @@ impl ReminderDatabase {
     pub fn list_reminders_by_note(&self, note_id: i64) -> Result<Vec<Reminder>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, note_id, title, description, due_date, priority, status, 
+            SELECT id, note_id, title, description, due_date, priority, status,
                    snooze_until, repeat_pattern, created_at, updated_at
             FROM reminders
             WHERE note_id = ?1
@@ -236,8 +236,8 @@ impl ReminderDatabase {
 
         self.conn.execute(
             r#"
-            UPDATE reminders 
-            SET title = ?1, description = ?2, due_date = ?3, priority = ?4, 
+            UPDATE reminders
+            SET title = ?1, description = ?2, due_date = ?3, priority = ?4,
                 repeat_pattern = ?5, updated_at = ?6
             WHERE id = ?7
             "#,
@@ -268,7 +268,7 @@ impl ReminderDatabase {
 
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, note_id, title, description, due_date, priority, status, 
+            SELECT id, note_id, title, description, due_date, priority, status,
                    snooze_until, repeat_pattern, created_at, updated_at
             FROM reminders
             WHERE status != 1
@@ -328,7 +328,7 @@ impl ReminderDatabase {
     pub fn get_reminders_by_note(&self, note_id: i64) -> Result<Vec<Reminder>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, note_id, title, description, due_date, priority, status, 
+            SELECT id, note_id, title, description, due_date, priority, status,
                    snooze_until, repeat_pattern, created_at, updated_at
             FROM reminders
             WHERE note_id = ?1

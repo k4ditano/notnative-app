@@ -302,6 +302,8 @@ pub enum MCPToolCall {
         #[serde(skip_serializing_if = "Option::is_none")]
         status: Option<String>, // "pending", "completed", "all" (default: "pending")
         #[serde(skip_serializing_if = "Option::is_none")]
+        days: Option<i32>, // Filtrar por próximos X días
+        #[serde(skip_serializing_if = "Option::is_none")]
         limit: Option<i32>,
     },
     UpdateReminder {

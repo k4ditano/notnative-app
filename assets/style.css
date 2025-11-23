@@ -468,7 +468,6 @@ button.flat:active {
 .status-bar togglebutton.toggle:hover {
   background-color: alpha(@selected-text, 0.15);
   background-image: none;
-  border: none;
 }
 
 .status-bar togglebutton:checked,
@@ -1458,6 +1457,73 @@ popover.background {
   background-color: alpha(@selected-text, 0.2);
 }
 
+/* Respuesta de IA en búsqueda semántica */
+.semantic-answer-box {
+  background-color: alpha(@selected-text, 0.05);
+  border: 1px solid alpha(@border, 0.3);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 8px;
+}
+
+.semantic-answer-title {
+  font-size: 10pt;
+  font-weight: 600;
+  color: @text;
+  margin-bottom: 8px;
+  opacity: 0.7;
+}
+
+.semantic-answer-label {
+  font-size: 10pt;
+  color: @text;
+  line-height: 1.5;
+}
+
+.semantic-answer-label a {
+  color: @selected-text;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.semantic-answer-label a:hover {
+  text-decoration: underline;
+}
+
+/* Popover de menciones @ en chat IA */
+.mention-completion {
+  background-color: @base;
+  border: 1px solid @border;
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 300px;
+  min-height: 250px;
+}
+
+.mention-completion scrolledwindow {
+  min-width: 300px;
+  min-height: 250px;
+}
+
+.mention-completion listbox {
+  background-color: transparent;
+  border-radius: 6px;
+}
+
+.mention-completion listboxrow {
+  padding: 8px 12px;
+  border-radius: 4px;
+  margin: 2px;
+}
+
+.mention-completion listboxrow:hover {
+  background-color: alpha(@selected-text, 0.1);
+}
+
+.mention-completion listboxrow:selected {
+  background-color: alpha(@selected-text, 0.2);
+}
+
 /* === Notificaciones Toast === */
 .notification-toast {
   background-color: alpha(@base, 0.95);
@@ -1490,4 +1556,54 @@ window.aboutdialog box {
 window.aboutdialog label {
   margin-top: 8px;
   margin-bottom: 8px;
+}
+
+/* === Recordatorios Inline === */
+.reminder-inline-compact {
+  background-color: alpha(@selected-text, 0.1);
+  border: 1px solid alpha(@border, 0.5);
+  border-radius: 6px;
+  padding: 0px 6px;
+  margin: 0 4px; /* Margen horizontal solamente */
+}
+
+.reminder-text-compact {
+  font-size: 0.85em;
+  color: @text;
+  font-weight: 500;
+}
+
+/* Markdown Tables */
+.markdown-table {
+  /* Border removed to avoid double border with container */
+  background-color: alpha(@base, 0.5);
+  /* margin moved to container */
+}
+
+.table-cell {
+  padding: 8px 12px;
+  border-bottom: 1px solid alpha(@border, 0.2);
+  border-right: 1px solid alpha(@border, 0.2);
+}
+
+.table-header {
+  background-color: alpha(@selected-text, 0.1);
+  font-weight: bold;
+  border-bottom: 2px solid alpha(@border, 0.3);
+}
+
+.table-header-label {
+  font-weight: bold;
+}
+
+.table-container {
+  border-radius: 6px;
+  border: 1px solid alpha(@border, 0.5);
+  margin: 8px 0;
+  background-color: alpha(@base, 0.5);
+}
+
+.transparent-viewport {
+  background-color: transparent;
+  border: none;
 }

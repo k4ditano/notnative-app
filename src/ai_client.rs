@@ -55,6 +55,9 @@ pub trait AIClient: Send + Sync {
         messages: &[ChatMessage],
         context: &str,
     ) -> Result<tokio::sync::mpsc::UnboundedReceiver<String>>;
+
+    /// Permite downcasting para acceder a tipos concretos
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 /// Cliente para OpenAI
@@ -78,6 +81,10 @@ impl OpenAIClient {
 
 #[async_trait]
 impl AIClient for OpenAIClient {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     async fn send_message_with_tools(
         &self,
         messages: &[ChatMessage],
@@ -491,6 +498,10 @@ impl AnthropicClient {
 
 #[async_trait]
 impl AIClient for AnthropicClient {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     async fn send_message_with_tools(
         &self,
         _messages: &[ChatMessage],
@@ -536,6 +547,10 @@ impl OllamaClient {
 
 #[async_trait]
 impl AIClient for OllamaClient {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     async fn send_message_with_tools(
         &self,
         _messages: &[ChatMessage],
@@ -561,6 +576,22 @@ impl AIClient for OllamaClient {
 
 /// Factory para crear clientes de IA según la configuración
 pub fn create_client(config: &AIModelConfig, api_key: &str) -> Result<Box<dyn AIClient>> {
+    // Si es OpenAI y usa clave de OpenRouter, usar el cliente de OpenRouter de RIG
+    if matches!(config.provider, AIProvider::OpenAI) && api_key.starts_with("sk-or-") {
+        use crate::ai::rig_adapter::RigClient;
+        // Crear configuración temporal para OpenRouter
+        let or_config = AIModelConfig {
+            provider: config.provider,
+            model: config.model.clone(),
+            temperature: config.temperature,
+            max_tokens: config.max_tokens,
+        };
+        return Ok(Box::new(RigClient::new_openrouter(&or_config, api_key)?));
+    } else if matches!(config.provider, AIProvider::OpenAI) {
+        use crate::ai::rig_adapter::RigClient;
+        return Ok(Box::new(RigClient::new(config, api_key)?));
+    }
+
     match config.provider {
         AIProvider::OpenAI => Ok(Box::new(OpenAIClient::new(
             api_key.to_string(),

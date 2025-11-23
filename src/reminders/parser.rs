@@ -20,21 +20,26 @@ pub struct ParsedReminder {
 /// Parser de recordatorios en markdown
 #[derive(Debug)]
 pub struct ReminderParser {
-    spanish_regex: Regex,
-    english_regex: Regex,
+    spanish_regex_v2: Regex,
+    english_regex_v2: Regex,
+    internal_regex: Regex,
 }
 
 impl ReminderParser {
     pub fn new() -> Self {
-        // !!RECORDAR(fecha [prioridad] [repetir=patron]) texto
-        let spanish_regex = Regex::new(r"!!RECORDAR\((.*?)\)\s+(.*?)(?:\n|$)").unwrap();
+        // Formato V2: !!RECORDAR(fecha [prioridad] [repetir=patron], texto)
+        let spanish_regex_v2 = Regex::new(r"!!RECORDAR\(([^,]+),\s*(.*?)\)").unwrap();
 
-        // !!REMIND(date [priority] [repeat=pattern]) text
-        let english_regex = Regex::new(r"!!REMIND\((.*?)\)\s+(.*?)(?:\n|$)").unwrap();
+        // Formato V2: !!REMIND(date [priority] [repeat=pattern], text)
+        let english_regex_v2 = Regex::new(r"!!REMIND\(([^,]+),\s*(.*?)\)").unwrap();
+
+        // Formato Interno (Widget): [REMINDER:params|text]
+        let internal_regex = Regex::new(r"\[REMINDER:(.*?)\|(.*?)\]").unwrap();
 
         Self {
-            spanish_regex,
-            english_regex,
+            spanish_regex_v2,
+            english_regex_v2,
+            internal_regex,
         }
     }
 
@@ -42,8 +47,20 @@ impl ReminderParser {
     pub fn extract_reminders(&self, text: &str, language: Language) -> Vec<ParsedReminder> {
         let mut reminders = Vec::new();
 
-        // Buscar en español
-        for cap in self.spanish_regex.captures_iter(text) {
+        // Buscar formato interno (Widget) - Prioridad alta ya que es lo que hay en el buffer en modo Normal
+        for cap in self.internal_regex.captures_iter(text) {
+            let params = cap.get(1).map_or("", |m| m.as_str());
+            let title = cap.get(2).map_or("", |m| m.as_str()).trim();
+            let original = cap.get(0).map_or("", |m| m.as_str());
+
+            // Usar idioma actual o intentar detectar (el formato interno es agnóstico)
+            if let Ok(parsed) = self.parse_params(params, title, original, language) {
+                reminders.push(parsed);
+            }
+        }
+
+        // Buscar en español (V2)
+        for cap in self.spanish_regex_v2.captures_iter(text) {
             let params = cap.get(1).map_or("", |m| m.as_str());
             let title = cap.get(2).map_or("", |m| m.as_str()).trim();
             let original = cap.get(0).map_or("", |m| m.as_str());
@@ -53,8 +70,8 @@ impl ReminderParser {
             }
         }
 
-        // Buscar en inglés
-        for cap in self.english_regex.captures_iter(text) {
+        // Buscar en inglés (V2)
+        for cap in self.english_regex_v2.captures_iter(text) {
             let params = cap.get(1).map_or("", |m| m.as_str());
             let title = cap.get(2).map_or("", |m| m.as_str()).trim();
             let original = cap.get(0).map_or("", |m| m.as_str());
@@ -130,30 +147,15 @@ impl ReminderParser {
 
         let first = parts[0].to_lowercase();
 
-        // Palabras clave relativas
-        match language {
-            Language::Spanish => {
-                if first == "hoy" {
-                    return self
-                        .parse_time_today(&parts[1..], language)
-                        .map(|(dt, c)| (dt, c + 1));
-                } else if first == "mañana" || first == "manana" {
-                    return self
-                        .parse_time_tomorrow(&parts[1..], language)
-                        .map(|(dt, c)| (dt, c + 1));
-                }
-            }
-            Language::English => {
-                if first == "today" {
-                    return self
-                        .parse_time_today(&parts[1..], language)
-                        .map(|(dt, c)| (dt, c + 1));
-                } else if first == "tomorrow" {
-                    return self
-                        .parse_time_tomorrow(&parts[1..], language)
-                        .map(|(dt, c)| (dt, c + 1));
-                }
-            }
+        // Palabras clave relativas (intentar ambos idiomas para mayor flexibilidad)
+        if first == "hoy" || first == "today" {
+            return self
+                .parse_time_today(&parts[1..], language)
+                .map(|(dt, c)| (dt, c + 1));
+        } else if first == "mañana" || first == "manana" || first == "tomorrow" {
+            return self
+                .parse_time_tomorrow(&parts[1..], language)
+                .map(|(dt, c)| (dt, c + 1));
         }
 
         // Intentar parsear fecha absoluta: YYYY-MM-DD HH:MM o DD/MM/YYYY HH:MM
@@ -274,7 +276,7 @@ mod tests {
     #[test]
     fn test_parse_spanish_today() {
         let parser = ReminderParser::new();
-        let text = "!!RECORDAR(hoy 15:00) Llamar al dentista";
+        let text = "!!RECORDAR(hoy 15:00, Llamar al dentista)";
 
         let reminders = parser.extract_reminders(text, Language::Spanish);
         assert_eq!(reminders.len(), 1);
@@ -285,7 +287,7 @@ mod tests {
     #[test]
     fn test_parse_english_tomorrow() {
         let parser = ReminderParser::new();
-        let text = "!!REMIND(tomorrow 09:00 high) Team meeting";
+        let text = "!!REMIND(tomorrow 09:00 high, Team meeting)";
 
         let reminders = parser.extract_reminders(text, Language::English);
         assert_eq!(reminders.len(), 1);
@@ -296,7 +298,7 @@ mod tests {
     #[test]
     fn test_parse_absolute_date() {
         let parser = ReminderParser::new();
-        let text = "!!RECORDAR(2025-11-20 15:00 urgente) Entrega proyecto";
+        let text = "!!RECORDAR(2025-11-20 15:00 urgente, Entrega proyecto)";
 
         let reminders = parser.extract_reminders(text, Language::Spanish);
         assert_eq!(reminders.len(), 1);
@@ -307,7 +309,7 @@ mod tests {
     #[test]
     fn test_parse_with_repeat() {
         let parser = ReminderParser::new();
-        let text = "!!REMIND(2025-11-25 10:00 daily) Daily standup";
+        let text = "!!REMIND(2025-11-25 10:00 daily, Daily standup)";
 
         let reminders = parser.extract_reminders(text, Language::English);
         assert_eq!(reminders.len(), 1);

@@ -11,6 +11,7 @@ use crate::mcp::{MCPToolExecutor, get_all_tool_definitions};
 pub enum ExecutorType {
     ReAct, // Razonamiento + Acción (con herramientas)
     Basic, // Chat simple sin herramientas
+    Rig,   // Agente RIG nativo
 }
 
 /// Agente especializado en un tipo de tarea
@@ -94,6 +95,10 @@ impl Agent {
 
                 llm.send_message(&full_messages, "").await
             }
+            ExecutorType::Rig => {
+                use crate::ai::executors::RigExecutor;
+                return RigExecutor::run(llm.clone(), messages, context, mcp_executor).await;
+            }
         }
     }
 }
@@ -115,7 +120,7 @@ Sigue estas reglas de trabajo:
 1. Tu objetivo principal es **crear UNA nota por solicitud**.
 2. Usa estructuras bien formateadas con encabezados, listas y énfasis (`**negritas**`, `_itálicas_`), manteniendo coherencia y claridad.
 3. Puedes usar las herramientas: create_note, update_note, append_to_note, add_tags y add_multiple_tags.
-4. **Después de ejecutar `create_note` y recibir una confirmación exitosa, no vuelvas a ejecutarla.** 
+4. **Después de ejecutar `create_note` y recibir una confirmación exitosa, no vuelvas a ejecutarla.**
    En su lugar, da una respuesta final confirmando la creación de la nota.
 5. Si la nota ya existe o se ha creado, utiliza `update_note` o `append_to_note` solo si el contenido necesita cambios.
 6. **Nunca ejecutes más de una herramienta por iteración.**
@@ -201,6 +206,17 @@ Este agente debe siempre producir UNA sola nota final por tarea, y nunca entrar 
             instructions: "Eres un asistente amigable de NotNative. Responde de forma concisa a saludos, conversación casual y preguntas generales. Si preguntan sobre herramientas, menciona que NotNative puede crear, buscar y organizar notas, analizar contenido, gestionar tags y usar búsqueda semántica. Sé breve pero amigable.".to_string(),
             allowed_tools: Vec::new(),
             executor_type: ExecutorType::Basic,
+        }
+    }
+
+    /// Agente nativo RIG con herramientas integradas
+    pub fn rig_agent() -> Self {
+        Self {
+            name: "RigAgent".to_string(),
+            description: "Agente nativo usando RIG Framework".to_string(),
+            instructions: "Eres un asistente inteligente potenciado por RIG.".to_string(),
+            allowed_tools: vec![], // Las herramientas se definen en el ejecutor RIG
+            executor_type: ExecutorType::Rig,
         }
     }
 }

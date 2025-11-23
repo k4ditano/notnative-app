@@ -895,6 +895,10 @@ pub fn get_all_tool_definitions() -> Vec<MCPTool> {
                         "enum": ["pending", "completed", "snoozed", "all", "pendiente", "completado", "pospuesto"],
                         "description": "Estado de los recordatorios a listar (default: 'pending')"
                     },
+                    "days": {
+                        "type": "integer",
+                        "description": "Filtrar recordatorios para los próximos X días (opcional)"
+                    },
                     "limit": {
                         "type": "integer",
                         "description": "Número máximo de resultados (opcional)"

@@ -88,6 +88,13 @@ pub fn create_notes_watcher(
                                         content: content.clone(),
                                     });
 
+                                    // Si es la nota actual, recargarla para mostrar cambios
+                                    let _ = sender.send(
+                                        crate::app::AppMsg::ReloadCurrentNoteIfMatching {
+                                            path: path.to_str().unwrap_or("").to_string(),
+                                        },
+                                    );
+
                                     // Si está en una carpeta, expandirla automáticamente
                                     if let Some(ref folder_name) = folder {
                                         let _ = sender.send(crate::app::AppMsg::ExpandFolder(

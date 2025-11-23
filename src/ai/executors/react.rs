@@ -119,10 +119,61 @@ impl ReActExecutor {
             }
 
             // 1. El LLM piensa qué hacer (puede incluir texto + tool calls)
-            let response = self
+            let response = match self
                 .llm
                 .send_message_with_tools(&messages, "", Some(&self.mcp_registry))
-                .await?;
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    // Detectar errores de red transitorios
+                    let error_msg = e.to_string();
+                    if error_msg.contains("timeout") || error_msg.contains("connection") {
+                        println!("⚠️ Error de red transitorio: {}", error_msg);
+
+                        // Reintentar una vez después de 2 segundos
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                        println!("🔄 Reintentando llamada al LLM...");
+
+                        match self
+                            .llm
+                            .send_message_with_tools(&messages, "", Some(&self.mcp_registry))
+                            .await
+                        {
+                            Ok(resp) => resp,
+                            Err(retry_err) => {
+                                let final_error = format!(
+                                    "Error persistente al comunicar con el LLM: {}. \
+                                    Por favor verifica tu conexión a internet y la configuración de la API.",
+                                    retry_err
+                                );
+                                println!("❌ {}", final_error);
+                                let answer_step = ReActStep::Answer(format!("❌ {}", final_error));
+                                steps.push(answer_step.clone());
+                                step_callback(&answer_step);
+                                return Ok(steps);
+                            }
+                        }
+                    } else {
+                        // Error no relacionado con red (API key, rate limit, etc.)
+                        let final_error = if error_msg.contains("401")
+                            || error_msg.contains("unauthorized")
+                        {
+                            "Error de autenticación: Verifica que tu API key sea válida y esté correctamente configurada.".to_string()
+                        } else if error_msg.contains("429") || error_msg.contains("rate limit") {
+                            "Límite de tasa alcanzado: Has excedido el límite de solicitudes. Espera unos minutos e intenta de nuevo.".to_string()
+                        } else {
+                            format!("Error del LLM: {}", error_msg)
+                        };
+
+                        println!("❌ {}", final_error);
+                        let answer_step = ReActStep::Answer(format!("❌ {}", final_error));
+                        steps.push(answer_step.clone());
+                        step_callback(&answer_step);
+                        return Ok(steps);
+                    }
+                }
+            };
 
             // 2. Si hay texto (pensamiento/explicación), guardarlo
             if let Some(ref content) = response.content {
@@ -209,14 +260,14 @@ impl ReActExecutor {
 
                                 messages.push(ChatMessage {
                                     role: MessageRole::User,
-                                    content: format!("⚠️ LÍMITE ALCANZADO: Ya modificaste la nota '{}' {} veces. La tarea está completada. Responde al usuario confirmando qué se hizo.", 
+                                    content: format!("⚠️ LÍMITE ALCANZADO: Ya modificaste la nota '{}' {} veces. La tarea está completada. Responde al usuario confirmando qué se hizo.",
                                         note, count),
                                     timestamp: chrono::Utc::now(),
                                     context_notes: Vec::new(),
                                 });
 
                                 steps.push(ReActStep::Observation(
-                                    format!("{{\"success\": false, \"error\": \"Límite de modificaciones alcanzado para '{}' ({}/{}). Tarea completada.\"}}", 
+                                    format!("{{\"success\": false, \"error\": \"Límite de modificaciones alcanzado para '{}' ({}/{}). Tarea completada.\"}}",
                                         note, count, MAX_MODIFICATIONS_PER_NOTE)
                                 ));
 
@@ -246,7 +297,7 @@ impl ReActExecutor {
                             // En lugar de ejecutar, agregar mensaje informativo
                             messages.push(ChatMessage {
                                 role: MessageRole::User,
-                                content: format!("⚠️ LÍMITE ALCANZADO: Ya ejecutaste {} búsquedas semánticas (máximo: {}). Usa la información que ya tienes para responder al usuario. NO intentes más búsquedas semánticas.", 
+                                content: format!("⚠️ LÍMITE ALCANZADO: Ya ejecutaste {} búsquedas semánticas (máximo: {}). Usa la información que ya tienes para responder al usuario. NO intentes más búsquedas semánticas.",
                                     semantic_search_count, MAX_SEMANTIC_SEARCHES),
                                 timestamp: chrono::Utc::now(),
                                 context_notes: Vec::new(),
@@ -254,7 +305,7 @@ impl ReActExecutor {
 
                             // Registrar en steps que se intentó pero se bloqueó
                             steps.push(ReActStep::Observation(
-                                format!("{{\"success\": false, \"error\": \"Límite de búsquedas semánticas alcanzado ({}/{}). Usa la información ya obtenida.\"}}", 
+                                format!("{{\"success\": false, \"error\": \"Límite de búsquedas semánticas alcanzado ({}/{}). Usa la información ya obtenida.\"}}",
                                     semantic_search_count, MAX_SEMANTIC_SEARCHES)
                             ));
 
@@ -276,7 +327,20 @@ impl ReActExecutor {
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
                     // Ejecutar la herramienta MCP
-                    let result = self.mcp_executor.execute(tool_call.clone())?;
+                    let result = match self.mcp_executor.execute(tool_call.clone()) {
+                        Ok(res) => res,
+                        Err(e) => {
+                            println!("❌ Error ejecutando herramienta {:?}: {}", tool_call, e);
+
+                            // Crear respuesta de error estructurada
+                            use crate::mcp::tools::MCPToolResult;
+                            MCPToolResult {
+                                success: false,
+                                data: None,
+                                error: Some(format!("Error al ejecutar herramienta: {}", e)),
+                            }
+                        }
+                    };
 
                     // Marcar como ejecutado
                     executed_tools.push(tool_signature);

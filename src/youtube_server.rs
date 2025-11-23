@@ -59,12 +59,12 @@ impl YouTubeEmbedServer {
     </style>
 </head>
 <body>
-    <iframe 
-        src="https://www.youtube-nocookie.com/embed/{}?autoplay=0&mute=0&enablejsapi=1&rel=0&modestbranding=1&playsinline=1&controls=1&fs=1&cc_load_policy=0&iv_load_policy=3&autohide=1" 
-        frameborder="0" 
+    <iframe
+        src="https://www.youtube-nocookie.com/embed/{}?autoplay=0&mute=0&enablejsapi=1&rel=0&modestbranding=1&playsinline=1&controls=1&fs=1&cc_load_policy=0&iv_load_policy=3&autohide=1"
+        frameborder="0"
         referrerpolicy="no-referrer-when-downgrade"
         sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation allow-presentation"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen; speaker-selection" 
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen; speaker-selection"
         allowfullscreen
         loading="eager">
     </iframe>

@@ -463,7 +463,8 @@ impl I18n {
 
         // Chat AI - Modo Agente
         translations.insert("chat_mode_agent", ("Modo: Agente", "Mode: Agent"));
-        translations.insert("chat_mode_normal", ("Modo: Chat", "Mode: Chat"));
+        translations.insert("chat_new_session", ("Nueva sesión", "New Session"));
+        translations.insert("chat_mode_chat", ("Modo: Chat", "Mode: Chat"));
         translations.insert(
             "chat_toggle_mode_tooltip",
             (
